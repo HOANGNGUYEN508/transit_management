@@ -1,0 +1,145 @@
+<odoo>
+	<data>
+		<!-- ====================================================================== -->
+		<!-- Setup inter_transit Module Requirements -->
+		<!-- ====================================================================== -->
+		
+		<!-- Action: Create transit warehouse and setup picking types -->
+		<record id="action_create_transit_warehouse" model="ir.actions.server">
+			<field name="name">Create Transit Warehouse and Setup</field>
+			<field name="model_id" ref="base.model_res_company"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_create_transit_warehouse"/>
+			<field name="code">
+for company in records:
+    if company.child_ids:
+        try:
+            # Create transit warehouse (idempotent)
+            company.sudo()._create_transit_warehouse()
+
+            # Setup transit picking types for this company (only if it has real warehouses)
+            has_real_wh = bool(env['stock.warehouse'].sudo().search([
+                ('company_id', '=', company.id),
+                ('name', 'not like', '.TRANSIT'),
+                ('lot_stock_id.usage', '=', 'internal'),
+            ], limit=1))
+            if has_real_wh:
+                company.sudo()._create_warehouse_transit_picking_types()
+
+            # Setup transit picking types for each child company (recompute per child)
+            for child in company.child_ids:
+                child_has_real_wh = bool(env['stock.warehouse'].sudo().search([
+                    ('company_id', '=', child.id),
+                    ('name', 'not like', '.TRANSIT'),
+                    ('lot_stock_id.usage', '=', 'internal'),
+                ], limit=1))
+                if child_has_real_wh:
+                    child.sudo()._create_warehouse_transit_picking_types()
+
+        except Exception as e:
+            raise Exception("Error creating transit warehouse: %s" % str(e))
+			</field>
+		</record>
+
+		<!-- Action: Create transit picking types for newly created warehouse -->
+		<record id="action_warehouse_created" model="ir.actions.server">
+			<field name="name">Create Transit Picking Types for Warehouse</field>
+			<field name="model_id" ref="stock.model_stock_warehouse"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_warehouse_created"/>
+			<field name="code">
+# When a warehouse is created, setup transit picking types for that specific warehouse
+for warehouse in records:
+    if warehouse.company_id:
+        try:
+            # Create transit picking types for this specific warehouse 
+            warehouse.company_id.sudo()._create_warehouse_transit_picking_types(warehouse=warehouse)
+        except Exception as e:
+            raise Exception("Error creating transit picking types for warehouse: %s" % str(e))
+			</field>
+		</record>
+
+		<!-- Action: Update transit warehouse and sequence names when company name changes -->
+		<record id="action_update_transit_on_name_change" model="ir.actions.server">
+			<field name="name">Update Transit Warehouse/Sequence Names</field>
+			<field name="model_id" ref="base.model_res_company"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_update_transit_on_name_change"/>
+			<field name="code">
+if records:
+    try:
+        records.sudo().automation_handle_company_name_change()
+    except Exception as e:
+        raise Exception("Transit automation error: %s" % str(e))
+			</field>
+		</record>
+
+		<!-- ====================================================================== -->
+		<!-- Inter-transit Flow - 3 Rules -->
+		<!-- Wrapper Calls: Business logic in t4tek.transit.picking model methods -->
+		<!-- ====================================================================== -->
+
+		<!-- Rule 1: SRC picking done - Call wrapper function -->
+		<record id="action_transit_src_picking_done" model="ir.actions.server">
+			<field name="name">Transit: Src Picking Done</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_transit_src_picking_done"/>
+			<field name="code">
+# Find transit picking pair for this SRC picking
+transit_picking = env['t4tek.transit.picking'].search([
+    ('src_picking_id', '=', record.id)
+], limit=1)
+
+if transit_picking:
+    try:
+        # Call wrapper function - business logic hidden in model
+        transit_picking.automation_handle_src_picking_done()
+    except Exception as e:
+        raise Exception("Transit automation error: %s" % str(e))
+			</field>
+		</record>
+
+		<!-- Rule 2: SRC backorder ready - Create dest backorder and sync moves -->
+		<record id="action_transit_src_backorder_ready" model="ir.actions.server">
+			<field name="name">Transit: Src Backorder Ready</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_transit_src_backorder_ready"/>
+			<field name="code">
+# records = new src backorder pickings that just became 'assigned'
+# Find their PARENT transit pickings via backorder_id
+parent_transit_pickings = env['t4tek.transit.picking'].search([
+    ('src_picking_id', 'in', records.mapped('backorder_id').ids)
+])
+
+if parent_transit_pickings:
+    try:
+        parent_transit_pickings.automation_handle_src_backorder_ready(records)
+    except Exception as e:
+        raise Exception("Transit automation error: %s" % str(e))
+			</field>
+		</record>
+
+		<!-- Rule 3: DEST picking done - Call wrapper function -->
+		<record id="action_transit_dest_picking_done" model="ir.actions.server">
+			<field name="name">Transit: Dest Picking Done</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="state">code</field>
+			<field name="base_automation_id" ref="automation_transit_dest_picking_done"/>
+			<field name="code">
+# Find transit picking pair for this DEST picking
+transit_picking = env['t4tek.transit.picking'].search([
+    ('dest_picking_id', '=', record.id)
+], limit=1)
+
+if transit_picking:
+    try:
+        # Call wrapper function - business logic hidden in model
+        transit_picking.automation_handle_dest_picking_done()
+    except Exception as e:
+        raise Exception("Transit automation error: %s" % str(e))
+			</field>
+		</record>
+	</data>
+</odoo>

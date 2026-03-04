@@ -1,0 +1,71 @@
+<odoo>
+	<data>
+		<!-- ====================================================================== -->
+		<!-- Setup inter_transit Module Requirements -->
+		<!-- ====================================================================== -->
+		<!-- Automation: Create transit warehouse when company gets children -->
+		<record id="automation_create_transit_warehouse" model="base.automation">
+			<field name="name">Create Transit Warehouse When Company Gets Children</field>
+			<field name="model_id" ref="base.model_res_company"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_pre_domain">[('child_ids', '=', False)]</field>
+			<field name="filter_domain">[('child_ids', '!=', False)]</field>
+			<field name="trigger_field_ids" eval="[(6, 0, [ref('base.field_res_company__child_ids')])]"/>
+		</record>
+
+		<!-- Automation: Update transit warehouse/sequences when company name changes -->		
+		<record id="automation_update_transit_on_name_change" model="base.automation">
+			<field name="name">Update Transit Warehouse/Sequence When Company Name Changes</field>
+			<field name="model_id" ref="base.model_res_company"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_pre_domain">[('child_ids', '!=', False)]</field>
+			<field name="filter_domain">[('child_ids', '!=', False)]</field>
+			<field name="trigger_field_ids" eval="[(6, 0, [ref('base.field_res_company__name')])]"/>
+		</record>
+
+		<!-- Automation: Create transit picking types when normal warehouse is created -->
+		<record id="automation_warehouse_created" model="base.automation">
+			<field name="name">Create Transit Picking Types When Warehouse Created</field>
+			<field name="model_id" ref="stock.model_stock_warehouse"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_domain">[
+        ('company_id', '!=', False),
+        ('name', 'not like', '.TRANSIT'),
+        ('lot_stock_id.usage', '=', 'internal')
+      ]</field>
+		</record>
+
+		<!-- ====================================================================== -->
+		<!--  Inter-transit Flow - 3 Rules -->
+		<!-- ====================================================================== -->
+		<!-- Rule 1: When SRC picking validates, propagate to DEST regardless of backorder state -->
+		<record id="automation_transit_src_picking_done" model="base.automation">
+			<field name="name">Transit: Src Picking Done - Propagate to Dest</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_pre_domain">[('date_done', '=', False)]</field>
+			<field name="filter_domain">[('date_done', '!=', False)]</field>
+			<field name="trigger_field_ids" eval="[(6, 0, [ref('stock.field_stock_picking__date_done')])]"/>
+		</record>
+
+		<!-- Rule 2: When SRC backorder ready, create DEST backorder and sync to SRC -->
+		<record id="automation_transit_src_backorder_ready" model="base.automation">
+			<field name="name">Transit: Src Backorder Ready - Create Dest Backorder and Sync</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_pre_domain">[('state', 'in', ['draft', 'waiting', 'cancel'])]</field>
+			<field name="filter_domain">['&amp;','&amp;','&amp;', ('backorder_id','!=',False), ('picking_type_code','=','outgoing'), ('move_ids','!=',False), ('state', '=', 'assigned')]</field>
+			<field name="trigger_field_ids" eval="[(6, 0, [ref('stock.field_stock_picking__state')])]"/>
+		</record>
+
+		<!-- Rule 3: When DEST picking validates, populate quantities and finalize if last one -->
+		<record id="automation_transit_dest_picking_done" model="base.automation">
+			<field name="name">Transit: Dest Picking Done - Update Transit Order</field>
+			<field name="model_id" ref="stock.model_stock_picking"/>
+			<field name="trigger">on_create_or_write</field>
+			<field name="filter_pre_domain">[('date_done','=',False)]</field>
+			<field name="filter_domain">[ '&amp;', ('date_done','!=',False), ('picking_type_code','=','incoming')]</field>
+			<field name="trigger_field_ids" eval="[(6, 0, [ref('stock.field_stock_picking__date_done')])]"/>
+		</record>
+	</data>
+</odoo>

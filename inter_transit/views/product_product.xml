@@ -1,0 +1,23 @@
+<odoo>
+	<!-- <record id="product_search_form_view_stock_report_inter_transit" model="ir.ui.view">
+		<field name="name">product.product.search.stock.form.stock.report.inter_transit</field>
+		<field name="model">product.product</field>
+		<field name="inherit_id" ref="stock.product_search_form_view_stock_report"/>
+		<field name="arch" type="xml">
+			<xpath expr="//searchpanel" position="inside">
+				<field name="inter_transit_location_ids" string="Transit Warehouses" icon="fa-truck" enable_counters="1" select="multi"/>
+			</xpath> 
+		</field>
+	</record> -->
+
+	<record id="product_product_stock_tree_inter_transit" model="ir.ui.view">
+		<field name="name">product.product.stock.list.inter_transit</field>
+		<field name="model">product.product</field>
+		<field name="inherit_id" ref="stock.product_product_stock_tree"/>
+		<field name="arch" type="xml">
+			<xpath expr="//field[@name='free_qty']" position="before">
+				<field name="transit_qty" optional="show" sum="Total In Transit"/>
+			</xpath> 
+		</field>
+	</record>
+</odoo>

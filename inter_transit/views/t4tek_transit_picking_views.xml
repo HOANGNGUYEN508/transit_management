@@ -1,0 +1,151 @@
+<odoo>
+	<record id="view_t4tek_transit_picking_tree" model="ir.ui.view">
+		<field name="name">t4tek.transit.picking.tree</field>
+		<field name="model">t4tek.transit.picking</field>
+		<field name="arch" type="xml">
+			<list delete="0" create="0" decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch">
+				<field name="company_id" optional="hide"/>
+
+				<field name="t4tek_transit_order_id"/>
+				<field name="state" optional="hide" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'" />
+				<field name="scheduled_date" widget="datetime"/>
+				<field name="transit_date_done" widget="datetime"/>
+
+				<field name="src_picking_id"/>
+				<field name="src_picking_state" widget="badge" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
+				<field name="src_date_done" widget="datetime" optional="hide"/>
+
+				<field name="dest_picking_id"/>
+				<field name="dest_picking_state" widget="badge" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
+				<field name="dest_date_done" widget="datetime" optional="hide"/>
+			</list>
+		</field>
+	</record>
+
+	<!-- Form view for t4tek.transit.picking -->
+	<record id="view_t4tek_transit_picking_form" model="ir.ui.view">
+		<field name="name">t4tek.transit.picking.form</field>
+		<field name="model">t4tek.transit.picking</field>
+		<field name="arch" type="xml">
+			<form class="o_t4tek_transit_picking">
+				<header>
+					<field name="state" widget="statusbar" statusbar_visible="draft,assigned,in_progress,done" clickable="0"/>
+				</header>
+
+				<sheet>
+
+					<!-- Mismatch ribbon -->
+					<widget name="web_ribbon" text="Mismatch Detected" bg_color="text-bg-danger" invisible="not has_mismatch"/>
+
+					<div class="oe_title">
+						<h1>
+							<field name="t4tek_transit_order_id" readonly="1"/>
+						</h1>
+					</div>
+
+					<!-- Header meta info -->
+					<group>
+						<group>
+							<field name="src_company_id" readonly="1"/>
+							<field name="dest_company_id" readonly="1"/>
+							<field name="company_id" readonly="1" string="Ordering Company"/>
+							<field name="transit_location_id" readonly="1"/>
+						</group>
+						<group>
+							<field name="scheduled_date" readonly="1"/>
+							<field name="src_date_done" readonly="1"/>
+							<field name="dest_date_done" readonly="1"/>
+						</group>
+					</group>
+
+					<notebook>
+
+						<!-- ── Two-pane move comparison ── -->
+						<page string="Move Comparison" name="move_comparison">
+
+							<!-- Two-column pane layout -->
+							<div class="row">
+
+								<!-- ── LEFT: Source picking moves ── -->
+								<div class="col-lg-6 border-end pe-3">
+
+									<div class="d-flex align-items-center justify-content-between mb-2">
+										<h5 class="mb-0 text-muted">
+											<i class="fa fa-arrow-up-right-from-square me-1"/> Source Delivery
+										</h5>
+										<field name="src_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-bold"/>
+										<field name="src_picking_state" widget="badge" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'" readonly="1" nolabel="1"/>
+									</div>
+
+									<field name="src_picking_move_ids" readonly="1" nolabel="1">
+										<list decoration-danger="state == 'cancel'" decoration-success="state == 'done'" no_open="1">
+											<field name="product_id" optional="show"/>
+											<field name="description_picking" string="Description" optional="hide"/>
+											<field name="product_uom_qty" decoration-info="1"/>
+											<field name="quantity"/>
+											<field name="product_uom" string="Unit" groups="uom.group_uom"/>
+										</list>
+									</field>
+								</div>
+
+								<!-- ── RIGHT: Destination picking moves ── -->
+								<div class="col-lg-6 ps-3">
+
+									<div class="d-flex align-items-center justify-content-between mb-2">
+										<h5 class="mb-0 text-muted">
+											<i class="fa fa-arrow-down-to-line me-1"/> Destination Receipt
+										</h5>
+										<field name="dest_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-bold"/>
+										<field name="dest_picking_state" widget="badge" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'" readonly="1" nolabel="1"/>
+									</div>
+
+									<field name="dest_picking_move_ids" readonly="1" nolabel="1">
+										<list decoration-danger="state == 'cancel'" decoration-success="state == 'done'" no_open="1">
+											<field name="product_id" optional="show"/>
+											<field name="description_picking" string="Description" optional="hide"/>
+											<field name="product_uom_qty" decoration-info="1"/>
+											<field name="quantity"/>
+											<field name="product_uom" string="Unit" groups="uom.group_uom"/>
+										</list>
+									</field>
+								</div>
+
+							</div>
+
+							<!-- ── Detailed mismatch diff table (only when mismatch exists) ── -->
+							<div invisible="not has_mismatch" class="mt-4">
+								<h6 class="text-danger">
+									<i class="fa fa-table me-1"/> Detailed Mismatch Report
+								</h6>
+								<field name="comparison_html" readonly="1" nolabel="1" sanitize="0"/>
+							</div>
+
+						</page>
+
+					</notebook>
+				</sheet>
+			</form>
+		</field>
+	</record>
+
+	<record id="view_t4tek_transit_picking_search" model="ir.ui.view">
+		<field name="name">t4tek.transit.picking.search</field>
+		<field name="model">t4tek.transit.picking</field>
+		<field name="arch" type="xml">
+			<search>
+				<filter string="Company" name="group_by_company" context="{'group_by': 'company_id'}"/>
+			</search>
+		</field>
+	</record>
+
+	<record id="action_t4tek_transit_picking" model="ir.actions.act_window">
+		<field name="name">Transit Pickings</field>
+		<field name="res_model">t4tek.transit.picking</field>
+		<field name="view_mode">list,form,search</field>
+		<field name="help" type="html">
+			<p class="o_view_nocontent_smiling_face">
+				Manage inter-company transit pickings here.
+			</p>
+		</field>
+	</record>
+</odoo>

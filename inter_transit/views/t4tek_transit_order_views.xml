@@ -1,0 +1,124 @@
+<odoo>
+	<!-- Tree view for t4tek.transit.order -->
+	<record id="view_t4tek_transit_order_tree" model="ir.ui.view">
+		<field name="name">t4tek.transit.order.tree</field>
+		<field name="model">t4tek.transit.order</field>
+		<field name="arch" type="xml">
+			<list decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch">
+				<field name="name" decoration-bf="1"/>
+				<field name="src_company_id"/>
+				<field name="dest_company_id"/>
+				<field name="scheduled_date" widget="datetime"/>
+				<field name="date_done" widget="datetime" optional="show"/>
+				<field name="state" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"/>
+				<field name="company_id" optional="hide"/>
+
+				<!-- Hidden fields used for decorations -->
+				<field name="has_mismatch" column_invisible="1"/>
+				<field name="is_late" column_invisible="1"/>
+				<field name="is_today" column_invisible="1"/>
+				<field name="is_very_late" column_invisible="1"/>
+			</list>
+		</field>
+	</record>
+
+	<!-- Form view for t4tek.transit.order -->
+	<record id="view_t4tek_transit_order_form" model="ir.ui.view">
+		<field name="name">t4tek.transit.order.form</field>
+		<field name="model">t4tek.transit.order</field>
+		<field name="arch" type="xml">
+			<form class="o_t4tek_transit_order">
+				<header>
+					<!-- Left side action buttons -->
+					<button name="action_confirm" string="Mark as Todo" type="object" class="oe_highlight" invisible="state not in ['draft', 'cancel']"/>
+					<button name="action_cancel" string="Cancel" type="object" invisible="state in ['done', 'cancel', 'in_progress']"/>
+
+					<!-- Status bar with badges -->
+					<field name="state" widget="statusbar" statusbar_visible="draft,assigned,in_progress,done" clickable="0"/>
+				</header>
+
+				<sheet>
+					<!-- <div class="oe_button_box" name="button_box">
+					</div> -->
+
+					<widget name="web_ribbon" text="Cancelled" bg_color="text-bg-danger" invisible="state != 'cancel'"/>
+					<widget name="web_ribbon" text="Done" bg_color="text-bg-success" invisible="state != 'done'"/>
+
+					<div class="oe_title">
+						<h1>
+							<field name="name" readonly="1" placeholder="New Transit Order"/>
+						</h1>
+					</div>
+
+					<group>
+						<group>
+							<field name="allowed_company_ids" invisible="1"/>
+							<field name="src_company_id" string="Source Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select source company..." domain="[('id', 'in', allowed_company_ids)]" />
+							<field name="dest_company_id" string="Destination Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select destination company..." domain="[('id', 'in', allowed_company_ids)]" />
+							<field name="company_id" readonly="1"/>
+						</group>
+						<group>
+							<field name="scheduled_date" widget="datetime" decoration-info="1" string="Scheduled Date" readonly="state not in ['draft', 'cancel', 'assigned']"/>
+							<field name="date_done" widget="datetime" decoration-info="1" readonly="1" invisible="state not in ['done','canceled']"/>
+						</group>
+					</group>
+
+					<notebook>
+						<page string="Operations" name="operations">
+							<field name="line_ids" widget="section_and_note_one2many" readonly="state not in ['draft', 'cancel', 'assigned']">
+								<list editable="bottom" decoration-muted="state == 'cancel'">
+									<field name="product_uom_category_id" column_invisible="1"/>
+									<field name="company_id" column_invisible="1"/>
+
+									<field name="product_id" required="1" context="{'default_detailed_type': 'consu'}" options="{'no_create': True}" placeholder="Product"/>
+									<field name="name" optional="hide" placeholder="Description"/>
+									<field name="note" optional="hide" placeholder="Additonal note"/>
+									<field name="product_uom_qty" string="Demand" decoration-info="1"/>
+
+									<field name="product_uom" string="Unit" groups="uom.group_uom" options="{'no_create': True, 'no_open': True}"/>
+									<field name="quantity" column_invisible="not parent.has_done_pickings" optional="show" readonly="1" decoration-info="1"/>
+								</list>
+							</field>
+						</page>
+
+						<page string="Transit Pickings" name="transit_pickings">
+							<field name="transit_picking_ids" readonly="1" widget="section_and_note_one2many">
+								<list decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch" open_form_view="1">
+
+									<!-- Source side -->
+									<field name="src_picking_id"/>
+									<field name="src_picking_state" widget="badge" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
+									<field name="src_date_done" widget="datetime" optional="hide"/>
+
+									<!-- Destination side -->
+									<field name="dest_picking_id"/>
+									<field name="dest_picking_state" widget="badge" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
+									<field name="dest_date_done" widget="datetime" optional="hide"/>
+
+									<!-- Hidden fields used for decorations -->
+									<field name="has_mismatch" column_invisible="1"/>
+									<field name="is_late" column_invisible="1"/>
+									<field name="is_today" column_invisible="1"/>
+									<field name="is_very_late" column_invisible="1"/>
+									<field name="state" column_invisible="1"/>
+								</list>
+							</field>
+						</page>
+					</notebook>
+				</sheet>
+				<chatter/>
+			</form>
+		</field>
+	</record>
+
+	<!-- Action for t4tek.transit.order -->
+	<record id="action_t4tek_transit_order" model="ir.actions.act_window">
+		<field name="name">Inter-transits</field>
+		<field name="res_model">t4tek.transit.order</field>
+		<field name="view_mode">list,form</field>
+		<field name="help" type="html">
+			<p class="o_view_nocontent_smiling_face">Create a new Inter-transit Order</p>
+			<p>Inter-company transits manage the transfer of goods between different companies.Define the source and destination companies, add the products to transfer, and confirm to create the corresponding delivery and receipt orders.</p>
+		</field>
+	</record>
+</odoo>

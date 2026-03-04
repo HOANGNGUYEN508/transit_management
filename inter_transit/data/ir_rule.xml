@@ -1,0 +1,36 @@
+<odoo>
+	<data>
+		<record id="t4tek_transit_order_rule" model="ir.rule">
+			<field name="name">Transit Order multi-company</field>
+			<field name="model_id" ref="model_t4tek_transit_order"/>
+			<field name="domain_force">[
+        '|',
+        ('company_id', '=', False),
+        ('company_id', 'in', company_ids)
+      ]</field>
+			<field name="global" eval="True"/>
+		</record>
+
+		<record id="t4tek_transit_picking_rule" model="ir.rule">
+			<field name="name">Transit Picking multi-company</field>
+			<field name="model_id" ref="model_t4tek_transit_picking"/>
+			<field name="domain_force">[
+        '|',
+        ('company_id', '=', False),
+        ('company_id', 'in', company_ids)
+      ]</field>
+			<field name="global" eval="True"/>
+		</record>
+
+		<record id="t4tek_transit_picking_type_rule" model="ir.rule">
+			<field name="name">Transit Picking Type multi-company</field>
+			<field name="model_id" ref="model_t4tek_transit_picking_type"/>
+			<field name="domain_force">[
+        '|',
+        ('company_id', '=', False),
+        ('company_id', 'in', company_ids)
+      ]</field>
+			<field name="global" eval="True"/>
+		</record>
+	</data>
+</odoo>

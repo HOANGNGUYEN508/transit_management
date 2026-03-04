@@ -1,0 +1,29 @@
+<odoo>
+	<data>
+		<menuitem 
+			id="menu_t4tek_transit_order_management"
+			name="Inter-transits"
+			parent="stock.menu_stock_transfers"
+			groups="inter_transit.access_group_transit_order_administrator,inter_transit.access_group_transit_order_viewer"
+			action="action_t4tek_transit_order"
+			sequence="23"
+		/>
+
+		<menuitem 
+			id="menu_t4tek_transit_order_report_transit_pickings"
+			name="Transit Pickings History"
+			parent="stock.menu_warehouse_report"
+			action="action_t4tek_transit_picking"
+			sequence="201"
+		/>
+
+		<menuitem 
+			id="menu_t4tek_transit_picking_type_configuration"
+			name="Transit Operations Types"
+			parent="stock.menu_warehouse_config"
+			action="action_t4tek_transit_picking_type"
+			sequence="9"
+		/>
+	</data>
+</odoo>
+

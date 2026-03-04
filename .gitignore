@@ -1,0 +1,8 @@
+**/__pycache__/
+**/*.py[cod]
+config/
+env/
+docker-compose.yml
+.vscode/
+DockerFile
+.style.yapf
