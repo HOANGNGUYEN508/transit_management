@@ -156,40 +156,41 @@ class T4tekTransitPicking(models.Model):
     )
 
     @api.depends(
-    'src_picking_id.move_ids.quantity',
-    'src_picking_id.move_ids.product_uom_qty',
-    'src_picking_id.move_ids.product_uom',
-    'src_picking_id.move_ids.t4tek_transit_line_id',
-    'src_picking_id.move_ids.product_id',
-    'src_picking_id.move_line_ids.quantity',
-    'src_picking_id.move_line_ids.lot_id',
-    'src_picking_id.move_line_ids.lot_name',
-    'dest_picking_id.move_ids.quantity',
-    'dest_picking_id.move_ids.product_uom_qty',
-    'dest_picking_id.move_ids.product_uom',
-    'dest_picking_id.move_ids.t4tek_transit_line_id',
-    'dest_picking_id.move_ids.product_id',
-    'dest_picking_id.move_line_ids.quantity',
-    'dest_picking_id.move_line_ids.lot_id',
-    'dest_picking_id.move_line_ids.lot_name',
+        'src_picking_id.move_ids.quantity',
+        'src_picking_id.move_ids.product_uom_qty',
+        'src_picking_id.move_ids.product_uom',
+        'src_picking_id.move_ids.t4tek_transit_line_id',
+        'src_picking_id.move_ids.product_id',
+        'src_picking_id.move_line_ids.quantity',
+        'src_picking_id.move_line_ids.lot_id',
+        'src_picking_id.move_line_ids.lot_name',
+        'dest_picking_id.move_ids.quantity',
+        'dest_picking_id.move_ids.product_uom_qty',
+        'dest_picking_id.move_ids.product_uom',
+        'dest_picking_id.move_ids.t4tek_transit_line_id',
+        'dest_picking_id.move_ids.product_id',
+        'dest_picking_id.move_line_ids.quantity',
+        'dest_picking_id.move_line_ids.lot_id',
+        'dest_picking_id.move_line_ids.lot_name',
     )
     def _compute_mismatch_data(self):
-        """Compute has_mismatch and generate comparison_html only when needed."""
+        """Compute has_mismatch and generate unified comparison_html always."""
         for record in self:
             src = record.src_picking_id
             dest = record.dest_picking_id
 
             if not src or not dest:
                 record.has_mismatch = False
-                record.comparison_html = Markup('<p>Missing source or destination picking.</p>')
+                record.comparison_html = Markup(
+                    '<p class="text-muted fst-italic p-3">Missing source or destination picking.</p>'
+                )
                 continue
 
-            # Gather data structures (same as before)
+            # ── Build data structures ────────────────────────────────────────────
             lines_data = {}
             src_unlinked = []
             dest_unlinked = []
 
-            # Index source moves by transit line
             for move in src.move_ids:
                 line = move.t4tek_transit_line_id
                 if line:
@@ -203,7 +204,6 @@ class T4tekTransitPicking(models.Model):
                 else:
                     src_unlinked.append(move)
 
-            # Index destination moves by transit line
             for move in dest.move_ids:
                 line = move.t4tek_transit_line_id
                 if line:
@@ -218,39 +218,45 @@ class T4tekTransitPicking(models.Model):
                 else:
                     dest_unlinked.append(move)
 
-            # Build lot maps
             for data in lines_data.values():
                 if data['src_move']:
                     data['src_lots'] = self._get_lot_map(data['src_move'])
                 if data['dest_move']:
                     data['dest_lots'] = self._get_lot_map(data['dest_move'])
 
-            # Determine if there is any mismatch
+            # ── Compute mismatch flag ─────────────────────────────────────────────
             mismatch_found = self._check_mismatch_from_data(
                 lines_data, src_unlinked, dest_unlinked, dest_state=dest.state
             )
             record.has_mismatch = mismatch_found
 
-            # Generate HTML only if there is a mismatch
-            if mismatch_found:
-                html = self._build_comparison_html(
-                    lines_data, src_unlinked, dest_unlinked, src, dest
-                )
-                record.comparison_html = Markup(html)
-            else:
-                record.comparison_html = ''   # empty string hides the field in the form
+            # ── Always generate HTML ──────────────────────────────────────────────
+            html = self._build_comparison_html(
+                lines_data, src_unlinked, dest_unlinked, src, dest
+            )
+            record.comparison_html = Markup(html)
 
     def _get_lot_map(self, move):
-        """Return a dict {(product_id, lot_name): quantity} for the given stock.move."""
+        """Return {(product_id, lot_name): quantity} for a stock.move."""
         lot_map = {}
         for ml in move.move_line_ids:
             lot = ml.lot_id.name if ml.lot_id else (ml.lot_name or '')
-            key = (ml.product_id.id, lot)   # group by product+lot (safest)
+            key = (ml.product_id.id, lot)
             lot_map[key] = lot_map.get(key, 0.0) + ml.quantity
         return lot_map
 
+    def _lot_names_differ(self, src_lots, dest_lots):
+        """
+        Compare only the lot NAME keys, ignoring quantities.
+
+        Returns True only when the set of (product_id, lot_name) tuples differs.
+        A pure quantity difference on the same lots is NOT a lot mismatch —
+        it is already captured by the quantity comparison.
+        """
+        return set(src_lots.keys()) != set(dest_lots.keys())
+
     def _check_mismatch_from_data(self, lines_data, src_unlinked, dest_unlinked, dest_state):
-        """Determine if any mismatch exists using the pre‑built data structures."""
+        """Determine if any mismatch exists."""
         # 1. Unlinked moves on either side
         if src_unlinked or dest_unlinked:
             return True
@@ -260,158 +266,184 @@ class T4tekTransitPicking(models.Model):
             if not data['src_move'] or not data['dest_move']:
                 return True
 
-        # 3. Product mismatch or quantity mismatch (only meaningful when dest is done)
+        # 3. Product / quantity / lot-name mismatches (only meaningful when dest is done)
         if dest_state == 'done':
             for data in lines_data.values():
                 src_m = data['src_move']
                 dest_m = data['dest_move']
                 if not src_m or not dest_m:
                     continue
-                # Product mismatch
+
                 if src_m.product_id != dest_m.product_id:
                     return True
-                # Quantity mismatch (convert src done to dest UoM)
+
                 rounding = dest_m.product_uom.rounding
                 src_done_in_dest_uom = src_m.product_uom._compute_quantity(
                     src_m.quantity, dest_m.product_uom, rounding_method='HALF-UP'
                 )
                 if float_compare(src_done_in_dest_uom, dest_m.quantity, precision_rounding=rounding) != 0:
                     return True
-                # Lot mismatch
-                if data['src_lots'] != data['dest_lots']:
+
+                # ── FIX: compare lot NAMES only, not quantities ──────────────────
+                if self._lot_names_differ(data['src_lots'], data['dest_lots']):
                     return True
+
         return False
 
-    def _build_comparison_html(self, lines_data, src_unlinked, dest_unlinked, src_picking, dest_picking):
-        """Generate the HTML table from the prepared data."""
-        html = ['<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; border:1px solid #ddd;">']
-        html.append('''
-            <thead style="background:#f5f5f5;">
-                <tr>
-                    <th style="padding:8px; border:1px solid #ddd;">Product</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Expected Qty</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Source Done</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Destination Done</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Source Lots</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Destination Lots</th>
-                    <th style="padding:8px; border:1px solid #ddd;">Status</th>
-                </tr>
-            </thead>
-            <tbody>
-        ''')
+    # ── Styling constants ──────────────────────────────────────────────────────
+    _TH_STYLE  = "padding:10px 12px; font-weight:600; color:#212529; border-bottom:2px solid #dee2e6; background:#f8f9fa; white-space:nowrap;"
+    _TD_STYLE  = "padding:8px 12px; border-bottom:1px solid #dee2e6; vertical-align:top;"
+    _TD_ERR    = "padding:8px 12px; border-bottom:1px solid #dee2e6; vertical-align:top; background:#fff1f0;"
+    _TD_WARN   = "padding:8px 12px; border-bottom:1px solid #dee2e6; vertical-align:top; background:#fff8e1;"
 
-        # Rows for linked transit lines
+    def _badge(self, label, color):
+        """Render a small Bootstrap-like badge."""
+        colors = {
+            'success': ('#198754', '#d1e7dd'),
+            'danger':  ('#dc3545', '#f8d7da'),
+            'warning': ('#856404', '#fff3cd'),
+            'muted':   ('#6c757d', '#e9ecef'),
+            'info':    ('#0c63e4', '#cfe2ff'),
+        }
+        fg, bg = colors.get(color, ('#333', '#eee'))
+        return (
+            f'<span style="display:inline-block; padding:2px 8px; border-radius:10px; '
+            f'font-size:0.78em; font-weight:600; color:{fg}; background:{bg};">'
+            f'{label}</span>'
+        )
+
+    def _build_comparison_html(self, lines_data, src_unlinked, dest_unlinked, src_picking, dest_picking):
+        """
+        Generate a unified comparison table styled like Odoo's list view.
+
+        Always rendered — content adapts to whether mismatches exist.
+        """
+        dest_done = dest_picking.state == 'done'
+
+        html = [
+            '<div style="border:1px solid #dee2e6; border-radius:6px; overflow:hidden;">',
+            '<table style="width:100%; border-collapse:collapse; font-size:0.875rem;">',
+            '<thead><tr>',
+        ]
+
+        headers = ['Product', 'Expected', 'Source Done', 'Destination Done', 'Source Lots', 'Destination Lots', 'Status']
+        for h in headers:
+            html.append(f'<th style="{self._TH_STYLE}">{h}</th>')
+        html.append('</tr></thead><tbody>')
+
+        # ── Rows for transit-line-linked pairs ─────────────────────────────────
         for data in lines_data.values():
-            line = data['line']
-            src_move = data['src_move']
+            line      = data['line']
+            src_move  = data['src_move']
             dest_move = data['dest_move']
-            src_lots = data['src_lots']
+            src_lots  = data['src_lots']
             dest_lots = data['dest_lots']
 
-            product = line.product_id
-            product_name = escape(product.display_name) if product else ''
+            product      = line.product_id
+            product_name = escape(product.display_name) if product else '—'
 
-            expected_qty = line.product_qty if line.product_qty else (src_move.product_uom_qty if src_move else 0)
-            expected_uom = line.product_uom.name if line.product_uom else (src_move.product_uom.name if src_move else '')
+            expected_qty = line.product_uom_qty or (src_move.product_uom_qty if src_move else 0)
+            expected_uom = (line.product_uom.name if line.product_uom else
+                            (src_move.product_uom.name if src_move else ''))
 
-            src_qty = src_move.quantity if src_move else 0
-            src_uom = src_move.product_uom.name if src_move else ''
-            src_qty_str = f"{src_qty:.2f} {src_uom}" if src_move else '—'
+            src_qty_str  = (f"{src_move.quantity:.2f} {escape(src_move.product_uom.name)}"
+                            if src_move else '—')
+            dest_qty_str = (f"{dest_move.quantity:.2f} {escape(dest_move.product_uom.name)}"
+                            if dest_move else '—')
 
-            dest_qty = dest_move.quantity if dest_move else 0
-            dest_uom = dest_move.product_uom.name if dest_move else ''
-            dest_qty_str = f"{dest_qty:.2f} {dest_uom}" if dest_move else '—'
+            # ── Determine per-row issues ───────────────────────────────────────
+            issues      = []
+            qty_err     = False
+            lot_err     = False
+            missing_err = False
 
-            src_lots_html = self._format_lots(src_lots)
-            dest_lots_html = self._format_lots(dest_lots)
-
-            status_msgs = []
-            qty_match = True
-            lot_match = True
             if not src_move or not dest_move:
-                status_msgs.append('<span style="color:orange;">Missing move on one side</span>')
+                missing_err = True
+                issues.append(self._badge('Missing move', 'warning'))
+
+            elif src_move.product_id != dest_move.product_id:
+                issues.append(self._badge('Product mismatch', 'danger'))
+
             else:
-                if src_move.product_id != dest_move.product_id:
-                    status_msgs.append('<span style="color:red;">Product mismatch</span>')
-                # Compare quantities if dest is done, otherwise skip
-                if dest_picking.state == 'done':
+                if dest_done:
                     rounding = dest_move.product_uom.rounding
                     src_done_in_dest_uom = src_move.product_uom._compute_quantity(
                         src_move.quantity, dest_move.product_uom, rounding_method='HALF-UP'
                     )
-                    if float_compare(src_done_in_dest_uom, dest_move.quantity, precision_rounding=rounding) != 0:
-                        qty_match = False
-                        status_msgs.append('<span style="color:red;">Quantity mismatch</span>')
-                    if src_lots != dest_lots:
-                        lot_match = False
-                        status_msgs.append('<span style="color:red;">Lot mismatch</span>')
+                    if float_compare(src_done_in_dest_uom, dest_move.quantity,
+                                     precision_rounding=rounding) != 0:
+                        qty_err = True
+                        issues.append(self._badge('Qty mismatch', 'danger'))
+
+                    # ── FIX: only flag lot mismatch when lot NAMES differ ──────
+                    if self._lot_names_differ(src_lots, dest_lots):
+                        lot_err = True
+                        issues.append(self._badge('Lot mismatch', 'danger'))
+
                 else:
-                    # If dest not done, we can only warn about possible structural issues
-                    if not status_msgs:
-                        status_msgs.append('<span style="color:gray;">Destination not done</span>')
+                    issues.append(self._badge('Pending receipt', 'muted'))
 
-            if not status_msgs:
-                status_msgs.append('<span style="color:green;">OK</span>')
+            if not issues:
+                issues.append(self._badge('✓ Match', 'success'))
 
-            row_style = ''
-            qty_cell_style = ' background:#ffe6e6;' if not qty_match else ''
-            lot_cell_style = ' background:#ffe6e6;' if not lot_match else ''
+            # ── Cell styles ───────────────────────────────────────────────────
+            base   = self._TD_ERR if (qty_err or lot_err or missing_err) else self._TD_STYLE
+            qty_td = self._TD_ERR if qty_err else base
+            lot_td = self._TD_ERR if lot_err else base
 
-            html.append(f'''
-                <tr{row_style}>
-                    <td style="padding:8px; border:1px solid #ddd;">{product_name}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{expected_qty:.2f} {escape(expected_uom)}</td>
-                    <td style="padding:8px; border:1px solid #ddd;{qty_cell_style}">{src_qty_str}</td>
-                    <td style="padding:8px; border:1px solid #ddd;{qty_cell_style}">{dest_qty_str}</td>
-                    <td style="padding:8px; border:1px solid #ddd;{lot_cell_style}">{src_lots_html}</td>
-                    <td style="padding:8px; border:1px solid #ddd;{lot_cell_style}">{dest_lots_html}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{''.join(status_msgs)}</td>
-                </tr>
-            ''')
+            src_lots_html  = self._format_lots(src_lots)
+            dest_lots_html = self._format_lots(dest_lots)
 
-        # Rows for unlinked source moves
+            html.append(
+                f'<tr>'
+                f'<td style="{base}">{product_name}</td>'
+                f'<td style="{base}">{expected_qty:.2f}&nbsp;{escape(expected_uom)}</td>'
+                f'<td style="{qty_td}">{src_qty_str}</td>'
+                f'<td style="{qty_td}">{dest_qty_str}</td>'
+                f'<td style="{lot_td}">{src_lots_html}</td>'
+                f'<td style="{lot_td}">{dest_lots_html}</td>'
+                f'<td style="{base}">{"&nbsp;".join(issues)}</td>'
+                f'</tr>'
+            )
+
+        # ── Unlinked source moves ──────────────────────────────────────────────
         for move in src_unlinked:
-            product = move.product_id
-            product_name = escape(product.display_name)
-            expected_qty = move.product_uom_qty
-            expected_uom = move.product_uom.name
-            src_qty_str = f"{move.quantity:.2f} {move.product_uom.name}"
+            product_name = escape(move.product_id.display_name)
             src_lots_html = self._format_lots(self._get_lot_map(move))
-            status = '<span style="color:orange;">Unlinked (src only)</span>'
+            html.append(
+                f'<tr>'
+                f'<td style="{self._TD_WARN}">{product_name}</td>'
+                f'<td style="{self._TD_WARN}">{move.product_uom_qty:.2f}&nbsp;{escape(move.product_uom.name)}</td>'
+                f'<td style="{self._TD_WARN}">{move.quantity:.2f}&nbsp;{escape(move.product_uom.name)}</td>'
+                f'<td style="{self._TD_WARN}">—</td>'
+                f'<td style="{self._TD_WARN}">{src_lots_html}</td>'
+                f'<td style="{self._TD_WARN}">—</td>'
+                f'<td style="{self._TD_WARN}">{self._badge("Src only", "warning")}</td>'
+                f'</tr>'
+            )
 
-            html.append(f'''
-                <tr style="background:#fff3cd;">
-                    <td style="padding:8px; border:1px solid #ddd;">{product_name}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{expected_qty:.2f} {escape(expected_uom)}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{src_qty_str}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">—</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{src_lots_html}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">—</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{status}</td>
-                </tr>
-            ''')
-
-        # Rows for unlinked destination moves
+        # ── Unlinked destination moves ─────────────────────────────────────────
         for move in dest_unlinked:
-            product = move.product_id
-            product_name = escape(product.display_name)
-            expected_qty = move.product_uom_qty
-            expected_uom = move.product_uom.name
-            dest_qty_str = f"{move.quantity:.2f} {move.product_uom.name}"
+            product_name  = escape(move.product_id.display_name)
             dest_lots_html = self._format_lots(self._get_lot_map(move))
-            status = '<span style="color:orange;">Unlinked (dest only)</span>'
+            html.append(
+                f'<tr>'
+                f'<td style="{self._TD_WARN}">{product_name}</td>'
+                f'<td style="{self._TD_WARN}">{move.product_uom_qty:.2f}&nbsp;{escape(move.product_uom.name)}</td>'
+                f'<td style="{self._TD_WARN}">—</td>'
+                f'<td style="{self._TD_WARN}">{move.quantity:.2f}&nbsp;{escape(move.product_uom.name)}</td>'
+                f'<td style="{self._TD_WARN}">—</td>'
+                f'<td style="{self._TD_WARN}">{dest_lots_html}</td>'
+                f'<td style="{self._TD_WARN}">{self._badge("Dest only", "warning")}</td>'
+                f'</tr>'
+            )
 
-            html.append(f'''
-                <tr style="background:#fff3cd;">
-                    <td style="padding:8px; border:1px solid #ddd;">{product_name}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{expected_qty:.2f} {escape(expected_uom)}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">—</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{dest_qty_str}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">—</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{dest_lots_html}</td>
-                    <td style="padding:8px; border:1px solid #ddd;">{status}</td>
-                </tr>
-            ''')
+        # ── Empty state ────────────────────────────────────────────────────────
+        if not lines_data and not src_unlinked and not dest_unlinked:
+            html.append(
+                f'<tr><td colspan="7" style="{self._TD_STYLE} text-align:center; color:#6c757d; font-style:italic;">'
+                f'No moves found.</td></tr>'
+            )
 
         html.append('</tbody></table></div>')
         return ''.join(html)
@@ -419,17 +451,19 @@ class T4tekTransitPicking(models.Model):
     def _format_lots(self, lot_map):
         """Convert lot_map to an HTML string."""
         if not lot_map:
-            return '—'
+            return '<span style="color:#adb5bd;">—</span>'
         items = []
         for (product_id, lot_name), qty in lot_map.items():
-            lot_display = lot_name if lot_name else '<em>No lot</em>'
-            items.append(f"{escape(lot_display)}: {qty:.2f}")
+            lot_display = escape(lot_name) if lot_name else '<em>No lot</em>'
+            items.append(f'<span>{lot_display}:&nbsp;<strong>{qty:.2f}</strong></span>')
         return '<br/>'.join(items)
 
-    # Keep the date-related warnings separate
+    # =========================================================================
+    # DATE WARNINGS
+    # =========================================================================
     @api.depends(
         'state', 'scheduled_date',
-        'src_picking_state', 'dest_picking_state',  # if needed
+        'src_picking_state', 'dest_picking_state',
     )
     def _compute_picking_warnings(self):
         now = fields.Datetime.now()
@@ -494,7 +528,7 @@ class T4tekTransitPicking(models.Model):
                 )
     
     # =========================================================================
-    # AUTOMATION WRAPPER FUNCTIONS (SECURITY - Hide logic from UI)
+    # AUTOMATION WRAPPER FUNCTIONS
     # =========================================================================
     
     def automation_handle_src_picking_done(self):
@@ -517,15 +551,10 @@ class T4tekTransitPicking(models.Model):
                 f"transit '{self.t4tek_transit_order_id.name}' → in_progress"
             )
 
-            # Handle any src backorders created by Odoo during this validation.
-            # Rule 2 handles the case where the backorder immediately reaches 'assigned'.
-            # But if the backorder starts 'confirmed' (e.g. no move lines = no reservation),
-            # Rule 2 never fires. We handle that here for infinite backorder depth.
             src_backorders = self.src_picking_id.sudo().backorder_ids.filtered(
                 lambda p: p.state not in ('done', 'cancel')
             )
             for src_backorder in src_backorders:
-                # Idempotency: skip if Rule 2 already handled this backorder
                 existing = self.env['t4tek.transit.picking'].search([
                     ('src_picking_id', '=', src_backorder.id)
                 ], limit=1)
@@ -573,17 +602,6 @@ class T4tekTransitPicking(models.Model):
             )
         
     def automation_handle_src_backorder_ready(self, new_src_backorders):
-        """
-        AUTOMATION WRAPPER: Rule 2 - SRC backorder becomes ready
-
-        Purpose: Hide business logic from UI-visible automation code
-        Called when: SRC backorder picking state transitions to 'assigned'
-
-        Args:
-            self: parent t4tek.transit.picking records (original, not backorder)
-            new_src_backorders: stock.picking recordset of the new src backorder pickings
-        """
-        # Index parent transit picking by its src_picking_id for O(1) lookup
         parent_by_src_id = {tp.src_picking_id.id: tp for tp in self}
         errors = []
 
@@ -592,7 +610,6 @@ class T4tekTransitPicking(models.Model):
             if not parent_transit:
                 continue
 
-            # Idempotency check — skip if already processed
             existing = self.env['t4tek.transit.picking'].search([
                 ('src_picking_id', '=', new_backorder.id)
             ], limit=1)
@@ -636,13 +653,6 @@ class T4tekTransitPicking(models.Model):
             )
         
     def automation_handle_dest_picking_done(self):
-        """
-        AUTOMATION WRAPPER: Rule 3 - DEST picking validated
-        
-        Purpose: Hide business logic from UI-visible automation code
-        Called when: DEST picking date_done changes
-        """
-        # Validate SRC picking is done
         if self.src_picking_state != 'done':
             raise ValidationError(
                 f"Cannot validate Destination picking '{self.dest_picking_id.name}'. "
@@ -651,20 +661,16 @@ class T4tekTransitPicking(models.Model):
             )
         
         try:
-            # Always populate quantities for this portion
             self._populate_transit_quantities()
             
-            # Check if this is the final picking (no more backorders expected)
             has_backorders = bool(self.dest_picking_id.backorder_ids)
             
             if has_backorders:
-                # Intermediate: More backorders expected, keep transit in_progress
                 _logger.info(
                     f"Intermediate DEST picking '{self.dest_picking_id.name}' validated, "
                     f"transit '{self.t4tek_transit_order_id.name}' remains in_progress (has backorders)"
                 )
             else:
-                # Final: No more backorders, finalize transit to done
                 self.t4tek_transit_order_id.sudo().write({
                     'state': 'done',
                     'date_done': fields.Datetime.now()
@@ -684,30 +690,16 @@ class T4tekTransitPicking(models.Model):
                 f"Failed to process Destination picking validation for "
                 f"transit '{self.t4tek_transit_order_id.name}': {str(e)}"
             )
+
     # =========================================================================
-    # CORE SYNCHRONIZATION METHODS (INTERNAL - Hidden from automation)
+    # CORE SYNCHRONIZATION METHODS
     # =========================================================================
     def _sync_src_moves_to_dest_moves(self):
-        """
-        Sync source moves to destination moves (batched, supports multiple transit pickings).
-
-        Backorder mode (src_picking.backorder_id is set):
-        - Only syncs planned qty (product_uom_qty)
-        - Creates dest moves in draft state
-        - Uses skip_auto_assign context
-
-        Forward mode:
-        - Syncs both planned and actual qty
-        - Creates dest moves in assigned state
-        """
         if not self:
             return
 
-        # ── Collect operations across ALL transit pickings in self ─────────────────
-
         all_moves_to_delete  = self.env['stock.move']
         all_create_vals      = []
-        # {(is_backorder, frozenset(vals)): [move_id, ...]}
         all_update_buckets   = {}
 
         for transit_picking in self:
@@ -758,7 +750,6 @@ class T4tekTransitPicking(models.Model):
                         update_vals['t4tek_transit_line_id'] = line_id
 
                     if update_vals:
-                        # Bucket key includes is_backorder so we never mix write contexts
                         bucket_key = (is_backorder, frozenset(update_vals.items()))
                         all_update_buckets.setdefault(bucket_key, []).append(dest_move.id)
 
@@ -772,18 +763,15 @@ class T4tekTransitPicking(models.Model):
                         'state': new_state,
                         't4tek_transit_line_id': line_id or False,
                         'product_uom_qty': planned_qty if is_backorder else actual_qty,
-                        '_is_backorder': is_backorder,  # temp marker, stripped before create
+                        '_is_backorder': is_backorder,
                     }
                     if not is_backorder:
                         vals['quantity'] = actual_qty
                     all_create_vals.append(vals)
 
-            # Collect unmatched dest moves for this picking
             for dest_move in dest_picking.move_ids:
                 if dest_move.id not in processed_dest_ids:
                     all_moves_to_delete |= dest_move
-
-        # ── Batch execute once across all transit pickings ─────────────────────────
 
         if all_moves_to_delete:
             all_moves_to_delete.unlink()
@@ -800,7 +788,6 @@ class T4tekTransitPicking(models.Model):
             _logger.info(f"Updated {total} dest moves in {len(all_update_buckets)} batch(es)")
 
         if all_create_vals:
-            # Split by is_backorder to apply correct context per group
             backorder_creates    = []
             non_backorder_creates = []
             for vals in all_create_vals:
@@ -833,14 +820,12 @@ class T4tekTransitPicking(models.Model):
         if dest_picking.move_line_ids:
             dest_picking.move_line_ids.unlink()
         
-        # Index dest moves by transit_line_id (NOT product_id — same product can appear multiple times)
         in_moves_by_line = {
             move.t4tek_transit_line_id.id: move
             for move in dest_picking.move_ids
             if move.t4tek_transit_line_id
         }
         
-        # Collect lot data
         lot_data_list = []
         for src_ml in src_picking.move_line_ids:
             lot_name = src_ml.lot_id.name if src_ml.lot_id else src_ml.lot_name
@@ -855,7 +840,6 @@ class T4tekTransitPicking(models.Model):
         for src_ml in src_picking.move_line_ids:
             product_id = src_ml.product_id.id
             
-            # Match via the src move line's parent move → transit_line_id
             transit_line_id = (
                 src_ml.move_id.t4tek_transit_line_id.id
                 if src_ml.move_id and src_ml.move_id.t4tek_transit_line_id
@@ -909,15 +893,6 @@ class T4tekTransitPicking(models.Model):
         )
     
     def _create_dest_backorder_from_src(self, src_backorder):
-        """
-        Create destination backorder matching source backorder structure
-        
-        Args:
-            src_backorder: stock.picking - the source backorder
-        
-        Returns:
-            stock.picking - newly created dest backorder
-        """
         self.ensure_one()
         
         dest_picking = self.dest_picking_id.sudo()
@@ -925,7 +900,6 @@ class T4tekTransitPicking(models.Model):
         if not src_backorder or not dest_picking:
             return False
         
-        # Create dest backorder
         dest_backorder_vals = {
             'partner_id': dest_picking.partner_id.id,
             'picking_type_id': dest_picking.picking_type_id.id,
@@ -937,7 +911,6 @@ class T4tekTransitPicking(models.Model):
         
         dest_backorder = self.env['stock.picking'].sudo().create(dest_backorder_vals)
         
-        # Create transit picking pair for backorder
         transit_picking_vals = {
             't4tek_transit_order_id': self.t4tek_transit_order_id.id,
             'src_picking_id': src_backorder.id,
@@ -954,22 +927,12 @@ class T4tekTransitPicking(models.Model):
         return dest_backorder
     
     def _batch_find_or_create_lots(self, lot_data_list):
-        """
-        Batch find or create lots as cross-company (company_id=False)
-        
-        Args:
-            lot_data_list: List of dicts with 'lot_name' and 'product_id'
-        
-        Returns:
-            dict: {(lot_name, product_id): stock.lot record}
-        """
         if not lot_data_list:
             return {}
         
         StockLot = self.env['stock.lot'].sudo()
         result = {}
         
-        # Collect unique lot keys
         lot_keys = set()
         for data in lot_data_list:
             lot_name = data.get('lot_name')
@@ -980,7 +943,6 @@ class T4tekTransitPicking(models.Model):
         if not lot_keys:
             return {}
         
-        # Search for lots by name+product ONLY (ignore company)
         if len(lot_keys) == 1:
             lot_name, product_id = list(lot_keys)[0]
             domain = [
@@ -991,7 +953,6 @@ class T4tekTransitPicking(models.Model):
             domain = []
             lot_keys_list = list(lot_keys)
             
-            # Build OR domain for multiple lots
             for _ in range(len(lot_keys_list) - 1):
                 domain.append('|')
             
@@ -1004,7 +965,6 @@ class T4tekTransitPicking(models.Model):
         
         existing_lots = StockLot.search(domain)
         
-        # Index existing lots and convert to cross-company if needed
         existing_map = {}
         
         for lot in existing_lots:
@@ -1013,7 +973,6 @@ class T4tekTransitPicking(models.Model):
             if key not in existing_map:
                 existing_map[key] = lot
                 
-                # If lot has a company_id, convert to cross-company
                 if lot.company_id:
                     try:
                         lot.write({'company_id': False})
@@ -1021,10 +980,8 @@ class T4tekTransitPicking(models.Model):
                     except Exception as e:
                         _logger.warning(f"Failed to convert lot '{lot.name}': {str(e)}")
         
-        # Identify missing lots
         missing_keys = lot_keys - set(existing_map.keys())
         
-        # Batch create missing lots as cross-company
         if missing_keys:
             create_vals_list = [
                 {
@@ -1067,7 +1024,6 @@ class T4tekTransitPicking(models.Model):
                                     pass
                             existing_map[key] = existing
         
-        # Build result map
         for lot_name, product_id in lot_keys:
             result[(lot_name, product_id)] = existing_map.get((lot_name, product_id), False)
         

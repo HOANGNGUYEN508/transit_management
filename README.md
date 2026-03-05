@@ -1,388 +1,202 @@
-# Inter-Transit Module: Comprehensive Documentation
+# Inter-Transit Module
 
 ## Overview
 
-The Inter-Transit Module is a sophisticated inventory management system designed for Odoo that automates and secures inter-company stock transfers between parent and child companies. It solves critical data integrity and operational challenges that arise when managing inventory transfers in multi-company environments.
+The Inter-Transit Module automates and secures inter-company stock transfers between parent and child companies in Odoo. It solves the data integrity and operational challenges that arise when managing inventory in multi-company environments.
 
 ---
 
 ## Problem Statement
 
-### Challenges in Traditional Odoo Inter-Company Transfers
-
-#### 1. **Manual Process & Human Error**
-- Odoo's native support for inter-company transit requires manual handling of stock transfers
-- No built-in automation for parent-child company relationships
-- High risk of data mishaps, incorrect quantities, and missing records
-
-#### 2. **Stock Disappearance During Transit**
-- When stock transfers between companies that don't have formal hierarchical relationships, inventory vanishes from the system
-- Companies existing only in the database (no organizational connection) cannot properly track transitional stock
-- Creates confusion about actual inventory levels and breaks logical transit workflows
-
-#### 3. **Scope Ambiguity**
-- Odoo allows transit between any companies without restrictions
-- No mechanism to enforce that transit only happens between related companies (parent-child)
-- Risk of broken transfers between unrelated entities or across multiple organizational levels
+Standard Odoo inter-company transfers require manual handling with no enforcement of organizational hierarchy:
+- **Human Error**: No built-in automation for parent-child relationships; high risk of incorrect quantities and missing records
+- **Stock Disappearance**: Inventory vanishes in transit between companies that lack formal hierarchical relationships, breaking logical transit workflows
+- **Scope Ambiguity**: No mechanism to restrict transit to related companies only, risking broken transfers between unrelated entities
 
 ---
 
 ## Solution Architecture
 
-The Inter-Transit Module implements a **restricted, auditable, automated transit system** with the following core principles:
+### 1. Hierarchical Transit Enforcement
+Transit is **limited to direct parent-child relationships only**. Grandchild transfers must process through intermediate steps, preventing complex cascading transfers that are difficult to audit.
 
-### 1. **Hierarchical Transit Enforcement**
-- Transit is **limited to direct parent-child relationships only**
-- Grandchild transfers must be processed through intermediate steps
-- Prevents complex cascading transfers that are difficult to audit and manage
-
-### 2. **Virtual Transit Warehouse System**
-
-#### The Transit Location Structure:
-```
-Company (Parent/Mother)
-    └── Transit Warehouse: {CompanyName}.TRANSIT (company_id!=NULL)
-            ├── View Location: {CompanyName}.TRANSIT (company_id=NULL)
-            │   └── Stock Location: Stock (type=transit, company_id=NULL)
-            └── Configured at parent level, serves all direct children
-```
-
-#### Why This Architecture Works:
-- **Virtual Location**: The transit stock location is treated as a virtual waypoint (like a truck in transit), not a physical location
-- **Cross-Company Access**: Locations have `company_id=NULL` allowing cross-company access per Odoo's multi-company rules
-- **Reporting Integrity**: The warehouse maintains `company_id` for the parent company, ensuring accurate stock calculations
-- **Zero Miscalculation**: Odoo's report calculation logic correctly processes quantities because they're tracked through the warehouse hierarchy
-
-### 3. **Two-Phase Picking System**
-
-Each transit is divided into **two paired pickings** but treated as a single logical operation:
+### 2. Virtual Transit Warehouse System
 
 ```
-Transfer Flow Example: Mother → Child A → Child B
-
-Step 1: Mother to Child A (automatic)
-┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-│  Mother      │   OUT   │  Mother      │   IN    │  Child A     │
-│  Stock       │ ──────> │  TRANSIT     │ ──────> │  Stock       │
-└──────────────┘         └──────────────┘         └──────────────┘
-
-Step 2: Child A to Child B (separate transit order)
-┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-│  Child A     │   OUT   │  Child A     │   IN    │  Child B     │
-│  Stock       │ ──────> │  TRANSIT     │ ──────> │  Stock       │
-└──────────────┘         └──────────────┘         └──────────────┘
+Company (Parent)
+└── Transit Warehouse: {CompanyName}.TRANSIT  (company_id = parent)
+        └── View Location: {CompanyName}.TRANSIT  (company_id = NULL)
+                └── Stock Location: Stock  (type=transit, company_id=NULL)
 ```
 
-#### Phase Details:
-- **Source (OUT) Picking**: Validates actual products and quantities at the departure point
-- **Destination (IN) Picking**: Receives only what was validated in the source picking
-- **Automatic Sync**: Lot numbers, serial numbers, and quantities are automatically synchronized from source to destination
-- **No Manual Intervention**: Once source is validated, destination receives exact data
+Transit stock locations use `company_id=NULL` for cross-company access per Odoo's multi-company rules, while the warehouse retains the parent's `company_id` for accurate stock reporting. The transit location acts as a virtual waypoint (like a truck in transit), not a physical one.
 
-### 4. **Backorder Support**
+### 3. Two-Phase Picking System
 
-The system handles scenarios where full quantities cannot be dispatched immediately:
+Each transit is two paired pickings treated as one logical operation:
 
 ```
-Scenario: Partial Stock Available
+Mother A → Child A1:
 
-Original Transit Order: 100 units
+┌──────────┐    OUT    ┌──────────┐    IN     ┌──────────┐
+│  A Stock │ ────────> │ A TRANSIT│ ────────> │ A1 Stock │
+└──────────┘           └──────────┘           └──────────┘
 
-After Source Validation:
-├── Main Picking: 80 units validated
-└── Backorder Picking: 20 units pending
-
-Logic:
-- Destination receives 80 units immediately
-- Backorder creates new source+destination picking pair for remaining 20 units
-- Each pair maintains full traceability
-- No data loss or confusion between main and backorder quantities
+Multi-hop (A → A1 → A1a) requires two separate transit orders:
+  Step 1: A → A1  (using A's transit warehouse)
+  Step 2: A1 → A1a  (using A1's transit warehouse)
 ```
 
-### 5. **Automated Setup & Management**
+- **Source (OUT) picking**: validates actual products, quantities, lots/serials at departure
+- **Destination (IN) picking**: automatically receives exactly what source validated—no manual intervention
+- **Mismatch detection**: on destination validation, the system flags any tampering with product, lot/serial, or quantity
 
-#### Automatic Triggers:
-- **Company Relationship Change**: When a child company is added to a parent, transit infrastructure is automatically created
-- **Company Name Change**: Transit warehouse name and sequences update automatically
-- **Warehouse Creation**: When a new warehouse is added to a company in an inter-company structure, transit picking types are automatically generated
+### 4. Backorder Support
 
-#### Post-Installation Hook:
-- On module installation, all existing parent-child relationships are scanned
-- Transit warehouses and picking types are created for all applicable companies
-- Full backward compatibility with existing company structures
+```
+Original order: 100 units
 
-### 6. **Advanced Four-Level Mapping & Automation Engine**
+After partial source validation:
+├── Main picking:      80 units validated → destination synced immediately
+└── Backorder picking: 20 units pending  → new source+destination pair created automatically
+```
 
-#### Inter-Transit Engine Architecture (Four-Level Structure):
-1. **Transit Order** (`t4tek.transit.order`): Main transit order definition and orchestration
-2. **Transit Order Line** (`t4tek.transit.order.line`): Individual line items specifying which products to transfer
-3. **Transit Picking Type** (`t4tek.transit.picking.type`): Configures picking operation behavior and location mappings
-4. **Transit Picking** (`t4tek.transit.picking`): Maps and synchronizes source and destination picking pairs
+Each backorder pair maintains full traceability; no data loss between main and backorder quantities.
 
-This four-level architecture ensures complete separation of concerns: orders define what to transfer, lines specify the details, picking types configure how transfers happen, and pickings execute the actual transfer logic.
+### 5. Automated Setup
 
-#### Automation Rules (Base Automation Framework - 6 Rules Total):
+Automation rules (using Odoo's base automation framework) handle infrastructure lifecycle:
 
-**Setup Rules (3):**
-- **Rule 1**: When company gets children → automatically create transit warehouse
-- **Rule 2**: When company name changes → automatically update transit warehouse/sequences
-- **Rule 3**: When warehouse is created → automatically generate transit picking types for the company structure
+| Trigger | Action |
+|---|---|
+| Child company added to parent | Create transit warehouse for parent |
+| Company name changes | Update transit warehouse name and sequences |
+| New warehouse created | Generate transit picking types for the company structure |
+| Source picking validated | Propagate moves to destination picking |
+| Source backorder created and ready | Create and sync corresponding destination backorder |
+| Destination picking validated | Update transit order status; mark done if all pickings complete |
 
-**Transit Flow Rules (3):**
-- **Rule 4**: When source picking validates → automatically propagate moves to destination picking
-- **Rule 5**: When source backorder is created and ready → automatically create corresponding destination backorder and sync
-- **Rule 6**: When destination picking validates → automatically update transit order status and finalize if all pickings complete
+On module installation, a post-install hook scans all existing parent-child relationships and creates transit infrastructure retroactively.
 
 ---
 
-## State Flow Diagram
+## Four-Level Engine Architecture
+
+| Level | Model | Responsibility |
+|---|---|---|
+| 1 | `t4tek.transit.order` | Main order definition and orchestration |
+| 2 | `t4tek.transit.order.line` | Line items: product, quantity, UOM |
+| 3 | `t4tek.transit.picking.type` | Picking operation behavior and location mappings |
+| 4 | `t4tek.transit.picking` | Maps and synchronizes source/destination picking pairs |
+
+---
+
+## State Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  TRANSIT ORDER LIFECYCLE                    │
-└─────────────────────────────────────────────────────────────┘
+DRAFT
+  │ action_confirm()
+  ▼
+ASSIGNED  ◄─── (onchange: companies / moves)
+  │ Source picking validated
+  ▼
+IN_PROGRESS
+  │ Destination picking validated
+  ▼
+DONE
 
-        ┌──────────┐
-        │  DRAFT   │
-        └────┬─────┘
-             │
-             │ action_confirm()
-             ↓
-        ┌──────────┐
-        │ ASSIGNED │◄─────┐ onchange companies/moves
-				│          │──────┘
-        └────┬─────┘                   
-             │                             
-             │ Source picking validated
-             ↓                             
-        ┌──────────────┐                   
-        │  IN_PROGRESS │
-        └────┬─────────┘
-             │
-             │ Dest picking validated
-             ↓ 
-        ┌──────────┐
-        │   DONE   │
-        └──────────┘
-
-Cancel Flow:
-- DRAFT/ASSIGNED → CANCEL (via action_cancel())
-- CANCEL → ASSIGNED (via action_confirm() after modifications)
-- DRAFT/CANCEL → Deleted (via unlink())
+Cancel:  DRAFT/ASSIGNED → CANCEL (action_cancel())
+Reopen:  CANCEL → ASSIGNED (action_confirm() after edits)
+Delete:  DRAFT/CANCEL only (via unlink())
 ```
 
 ---
 
 ## Technical Components
 
-### A. Core Models
+### Core Models
 
-#### `T4tekTransitOrder`
-- **Responsibility**: Main transit order definition
-- **Key Fields**:
-  - `company_id`: The parent company orchestrating the transfer
-  - `src_company_id`: Source location company
-  - `dest_company_id`: Destination location company
-  - `transit_location_id`: Computed transit location
-  - `t4tek_src_transit_picking_type_id`: Source picking operation type
-  - `t4tek_dest_transit_picking_type_id`: Destination picking operation type
+**`T4tekTransitOrder`** — Main transit order
+- Key fields: `company_id`, `src_company_id`, `dest_company_id`, `transit_location_id`, `t4tek_src_transit_picking_type_id`, `t4tek_dest_transit_picking_type_id`
 
-#### `T4tekTransitOrderLine`
-- **Responsibility**: Individual transfer line items
-- **Contains**: Product, quantity, and UOM information
+**`T4tekTransitOrderLine`** — Transfer line items
+- Fields: product, quantity, UOM
 
-#### `T4tekTransitPicking`
-- **Responsibility**: Maps src/dest stock picking pairs
-- **Functionality**:
-  - Tracks source and destination picking relationship
-  - Handles move line synchronization
-  - Manages backorder linking
+**`T4tekTransitPicking`** — Source/destination picking pair mapping
+- Handles move-line synchronization and backorder linking
 
-#### `T4tekTransitPickingType`
-- **Responsibility**: Configures picking operation behavior
-- **Contains**: Sequence, location mapping, and operation constraints
+**`T4tekTransitPickingType`** — Picking operation configuration
+- Fields: sequence, location mapping, operation constraints
 
-#### `ResCompany` (Extended)
-- **New Methods**:
-  - `_get_transit_location()`: Retrieves company's transit location
-  - `_create_transit_warehouse()`: Creates complete transit infrastructure
-  - `_create_warehouse_transit_picking_types()`: Generates picking types for warehouses
-  - `_archive_transit_warehouse_defaults()`: Cleans up unwanted Odoo auto-generated defaults
+**`ResCompany` (extended)** — New methods:
+- `_get_transit_location()`: retrieves company's transit location
+- `_create_transit_warehouse()`: creates complete transit infrastructure
+- `_create_warehouse_transit_picking_types()`: generates picking types for warehouses
+- `_archive_transit_warehouse_defaults()`: cleans up Odoo auto-generated defaults
 
-### B. Four-Level Architecture Deep Dive
-
-The inter-transit engine's four-level structure provides:
-- **Level 1 (Order)**: Centralized transit order management
-- **Level 2 (Order Lines)**: Granular control over what products transfer
-- **Level 3 (Picking Types)**: Configurable picking operation types for different company relationships
-- **Level 4 (Pickings)**: Mapping of actual source-destination picking pair execution and synchronization
-
-This layered approach allows both flexibility and control—complex multi-product transfers are handled at the order level, while individual product details flow through order lines, picking types define the transfer mechanics, and picking pairs execute the synchronization logic.
-
-### C. Key Features
-
-#### **Cross-Company Visibility**
-- Transit locations use `company_id=NULL` for cross-company access
-- Warehouse maintains company ownership for accurate reporting
-
-#### **Data Synchronization**
-- Source picking validation → Automatic destination picking data sync
-- Serial/lot numbers preserved
-- Quantity precision maintained through float comparisons
-
-#### **Audit Trail**
-- All transfers tracked through picking records
-- Integration with Odoo's mail.thread for notifications
-- Activity logging for transparency
-
-#### **Security**
-- Role-based security groups (`ir.model.access`) for transit operations
-- Multi-record rules (`ir.rule`) for company data isolation
+### Design Principles
+- Transit locations use `company_id=NULL`; warehouses retain company ownership
+- All models extend, never modify, core Odoo models
+- `ir.model.access` + `ir.rule` for role-based security and company data isolation
+- `mail.thread` integration for notifications and activity logging
 
 ---
 
 ## Usage Workflow
 
-### Step 1: Create Transit Order
-```
-1. User creates T4tek Transit Order
-2. Select source company, destination company
-3. Add transit order lines with products and quantities
-```
-
-### Step 2: Confirm Order
-```
-1. User clicks "Confirm"
-2. System automatically creates:
-   - Source picking (OUT)
-   - Destination picking (IN)
-   - Links them via T4tekTransitPicking record
-```
-
-### Step 3: Validate Source Picking
-```
-1. Warehouse validates source picking
-2. System automatically:
-   - Syncs moves to destination picking
-   - Updates transit order to "In Progress"
-   - Reserves quantities at destination
-```
-
-### Step 4: Validate Destination Picking
-```
-1. Receiving warehouse validates destination picking
-2. System automatically:
-   - Marks transit order as "Done"
-   - Creates final audit record
-```
-
-### Step 5: Backorder Handling (If Applicable)
-```
-1. If source picking has undelivered quantities
-2. System automatically:
-   - Creates backorder source picking
-   - Creates corresponding backorder destination picking
-   - Links backorder picking pair to original transit order
-3. Process continues from Step 3 for backorder
-```
+1. **Create Transit Order**: Select source company, destination company, add product lines
+2. **Confirm**: System creates the source (OUT) and destination (IN) picking pair
+3. **Validate Source**: Warehouse staff validates source picking → system auto-syncs moves to destination and updates order to "In Progress"
+4. **Validate Destination**: Receiving warehouse validates → system marks order "Done" and creates audit record
+5. **Backorders** (if applicable): Undelivered quantities automatically generate a new picking pair linked to the original order; process resumes from step 3
 
 ---
 
-## Configuration & Customization
+## Configuration
 
-### Adding a New Company to Inter-Company Structure
+**Adding a child company triggers full automation:**
 ```python
-# Adding Company B as child of Company A:
 company_a.write({'child_ids': [(4, company_b.id)]})
-
-# Automatically Triggered:
-# 1. Transit warehouse created for Company A (if not exists)
-# 2. Picking types created for all warehouses in Company A and Company B
-# 3. Sequences configured
+# → Transit warehouse created for Company A (if not exists)
+# → Picking types created for all warehouses in both companies
+# → Sequences configured
 ```
 
-### Creating Multiple Transit Routes
-- Define multiple `t4tek.transit.picking.type` records
-- Map to different warehouse + transit location combinations
-- System automatically selects appropriate type based on companies
-
-### Extending the Module
-The module is designed for extensibility:
-- New models inherit from existing ones without modification
-- Automation rules can be extended
-- Access rights can be refined per organization needs
+**Multiple transit routes**: Create additional `t4tek.transit.picking.type` records mapped to different warehouse + transit location combinations. System selects the appropriate type based on the companies involved.
 
 ---
 
-## Advantages & Benefits
+## Performance & Compatibility
 
-|        Aspect        |                          Benefit                           |
-|----------------------|------------------------------------------------------------|
-| **Automation**       | 95% reduction in manual transfer steps                     |
-| **Accuracy**         | Eliminates stock disappearance issues; 100% data integrity |
-| **Scalability**      | Supports unlimited parent-child relationships              |
-| **Auditability**     | Complete transfer history with timestamps and users        |
-| **Error Prevention** | Bidirectional validation prevents mismatches               |
-| **Performance**      | Minimal database queries through smart caching             |
-| **Compatibility**    | Non-invasive design doesn't modify core Odoo models        |
-| **Maintainability**  | Clear separation of concerns through mapping models        |
+| Metric | Value |
+|---|---|
+| Transit order + pickings creation | < 100ms |
+| Source → Destination sync | < 50ms |
+| DB queries per operation | 3–5 |
+| Storage per transit record | ~2KB |
 
----
-
-## Troubleshooting & Common Issues
-
-### Issue: Transit Location Not Found
-- **Cause**: Parent company has no children or transit warehouse not created
-- **Solution**: Manually add child company relationship; warehouse will auto-create
-
-### Issue: Backorder Quantities Incorrect
-- **Cause**: Stock reserved at source but not released from destination
-- **Solution**: Verify source picking validation; check stock availability
-
-### Issue: Picking Types Not Generated
-- **Cause**: Warehouse created before inter-company relationship established
-- **Solution**: Trigger warehouse update or manually run `_create_warehouse_transit_picking_types()`
+**Integrates with**: Stock, Stock Accounting, Base Automation
+**Does not modify**: Core stock.picking, warehouse logic, or company model
 
 ---
 
-## Integration Points
+## Troubleshooting
 
-### Compatible With:
-- Stock
-- Stock Accounting
-- Base Automation
-
-### Does NOT Modify:
-- Core Stock Picking model
-- Warehouse model logic
-- Company model (only extends)
+| Issue | Cause | Solution |
+|---|---|---|
+| Transit location not found | Parent has no children or warehouse not created | Add child company relationship; warehouse auto-creates |
+| Backorder quantities incorrect | Stock reserved at source but not released | Verify source picking validation; check availability |
+| Picking types not generated | Warehouse created before inter-company relationship | Manually run `_create_warehouse_transit_picking_types()` |
 
 ---
 
-## Performance Metrics
-
-- **Creation Time**: Transit order + pickings created in <100ms
-- **Validation Propagation**: Source→Destination sync in <50ms
-- **Database Queries**: Optimized to 3-5 queries per operation
-- **Storage**: ~2KB per transit record
+## Future Considerations
+- Support for grandchild direct transfers (with automated intermediate step creation)
+- Real-time transit tracking dashboard
+- Integration with landed costs for cross-border transfers
 
 ---
 
-## Support & Maintenance
+**Version**: 1.0.0 | **License**: Proprietary | **Author**: Nguyen Cao Hoang | **Status**: Active development
 
-Version: 1.0.0
-License: Proprietary
-Author: Nguyen Cao Hoang
-Maintained: Active development
-
----
-
-© 2026 Nguyen Cao Hoang. All rights reserved. Unauthorized use, reproduction, or distribution is prohibited without explicit written permission from the copyright owner.
-
----
-
-## Conclusion
-
-The Inter-Transit Module transforms multi-company inventory management from a manual, error-prone process to an intelligent, automated system. By enforcing hierarchical relationships, maintaining virtual transit locations, and implementing comprehensive automation rules, it ensures data integrity while significantly reducing operational overhead.
-
-This solution is particularly valuable for organizations with complex supply chains involving multiple legal entities, regional distribution centers, or franchise networks requiring centralized inventory coordination.
+© 2026 Nguyen Cao Hoang. All rights reserved.
