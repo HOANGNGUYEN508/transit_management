@@ -1,16 +1,27 @@
 <odoo>
-	<!-- Tree view for t4tek.transit.order -->
+	<!-- ─────────────────────────────────────────────────────────────────────
+	  Color-theme legend
+	  ─────────────────────────────────────────────────────────────────────
+	  decoration-muted   → cancelled
+	  decoration-danger  → very late  |  has_mismatch  |  lot/SN issue
+	  decoration-warning → late (not very late)  |  product presence issue  |  no qty received
+	  decoration-info    → scheduled today  |  draft
+	  decoration-primary → in progress  |  on track
+	  decoration-success → fully done, no mismatch
+	  ───────────────────────────────────────────────────────────────────── -->
+
+	<!-- List view for t4tek.transit.order -->
 	<record id="view_t4tek_transit_order_tree" model="ir.ui.view">
 		<field name="name">t4tek.transit.order.tree</field>
 		<field name="model">t4tek.transit.order</field>
 		<field name="arch" type="xml">
-			<list decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch">
+			<list decoration-muted="state == 'cancel'" decoration-danger="is_very_late or has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-success="state == 'done' and not has_mismatch">
 				<field name="name" decoration-bf="1"/>
 				<field name="src_company_id"/>
 				<field name="dest_company_id"/>
 				<field name="scheduled_date" widget="datetime"/>
 				<field name="date_done" widget="datetime" optional="show"/>
-				<field name="state" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"/>
+				<field name="state" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'" />
 				<field name="company_id" optional="hide"/>
 
 				<!-- Hidden fields used for decorations -->
@@ -29,28 +40,22 @@
 		<field name="arch" type="xml">
 			<form class="o_t4tek_transit_order">
 				<header>
-					<!-- Left side action buttons -->
 					<button name="action_confirm" string="Mark as Todo" type="object" class="oe_highlight" invisible="state not in ['draft', 'cancel']"/>
 					<button name="action_cancel" string="Cancel" type="object" invisible="state in ['done', 'cancel', 'in_progress']"/>
-
-					<!-- Status bar with badges -->
 					<field name="state" widget="statusbar" statusbar_visible="draft,assigned,in_progress,done" clickable="0"/>
 				</header>
 
 				<sheet>
-					<!-- <div class="oe_button_box" name="button_box">
-					</div> -->
-
-					<!-- Hidden fields used for decorations -->
+					<!-- Hidden fields used for decorations / logic -->
 					<field name="has_mismatch" invisible="1"/>
 					<field name="is_late" invisible="1"/>
 					<field name="is_today" invisible="1"/>
 					<field name="is_very_late" invisible="1"/>
+					<field name="has_done_pickings" invisible="1"/>
 
 					<widget name="web_ribbon" text="Cancelled" bg_color="text-bg-danger" invisible="state != 'cancel'"/>
 					<widget name="web_ribbon" text="Mismatch Detected" bg_color="text-bg-danger" invisible="not has_mismatch"/>
 					<widget name="web_ribbon" text="Done" bg_color="text-bg-success" invisible="state != 'done' or has_mismatch"/>
-
 
 					<div class="oe_title">
 						<h1>
@@ -61,38 +66,58 @@
 					<group>
 						<group>
 							<field name="allowed_company_ids" invisible="1"/>
-							<field name="src_company_id" string="Source Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select source company..." domain="[('id', 'in', allowed_company_ids)]" />
-							<field name="dest_company_id" string="Destination Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select destination company..." domain="[('id', 'in', allowed_company_ids)]" />
+							<field name="src_company_id" string="Source Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select source company..." domain="[('id', 'in', allowed_company_ids)]"/>
+							<field name="dest_company_id" string="Destination Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state not in ['draft', 'cancel', 'assigned']" placeholder="Select destination company..." domain="[('id', 'in', allowed_company_ids)]"/>
 							<field name="company_id" readonly="1"/>
 						</group>
 						<group>
 							<field name="scheduled_date" widget="datetime" decoration-info="1" string="Scheduled Date" readonly="state not in ['draft', 'cancel', 'assigned']"/>
-							<field name="date_done" widget="datetime" decoration-info="1" readonly="1" invisible="state not in ['done','canceled']"/>
+							<field name="date_done" widget="datetime" decoration-info="1" readonly="1" invisible="state not in ['done', 'canceled']"/>
 						</group>
 					</group>
 
 					<notebook>
+
+						<!-- ── Operations tab ─────────────────────────────────────── -->
 						<page string="Operations" name="operations">
 							<field name="line_ids" widget="section_and_note_one2many" readonly="state not in ['draft', 'cancel', 'assigned']">
-								<list editable="bottom" decoration-muted="state == 'cancel'">
+								<list editable="bottom" decoration-muted="state == 'cancel'" decoration-warning="state == 'done' and quantity == 0" decoration-danger="state == 'done' and quantity > 0 and quantity != product_uom_qty">
+									<!-- ── Color-theme for line rows ──────────────────────
+									  decoration-warning  → done + nothing received
+									                         (product-level issue, 🟡 yellow)
+									  decoration-danger   → done + qty received ≠ demanded
+									                         (quantity issue, closest to 🟠 orange)
+									  ─────────────────────────────────────────────────── -->
 									<field name="product_uom_category_id" column_invisible="1"/>
 									<field name="company_id" column_invisible="1"/>
+									<field name="state" column_invisible="1"/>
 
 									<field name="product_id" required="1" context="{'default_detailed_type': 'consu'}" options="{'no_create': True}" placeholder="Product"/>
 									<field name="name" optional="hide" placeholder="Description"/>
-									<field name="note" optional="hide" placeholder="Additonal note"/>
-									<field name="product_uom_qty" string="Demand" decoration-info="1"/>
-
+									<field name="note" optional="hide" placeholder="Additional note"/>
+									<field name="product_uom_qty" string="Demand"/>
 									<field name="product_uom" string="Unit" groups="uom.group_uom" options="{'no_create': True, 'no_open': True}"/>
-									<field name="quantity" column_invisible="not parent.has_done_pickings" optional="show" readonly="1" decoration-info="1"/>
+									<field name="quantity" column_invisible="not parent.has_done_pickings" optional="show" readonly="1"/>
 								</list>
 							</field>
 						</page>
 
+						<!-- ── Transit Pickings tab ───────────────────────────────── -->
 						<page string="Transit Pickings" name="transit_pickings">
 							<field name="transit_picking_ids" readonly="1" widget="section_and_note_one2many">
-								<list decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch" open_form_view="1">
+								<!-- ── Color-theme for picking pair rows ──────────────
+								  Per-pair done state uses src/dest picking states, not
+								  the transit order state, so backorder pairs are colored
+								  independently.
 
+								  decoration-muted    → transit order cancelled
+								  decoration-danger   → very late  |  mismatch detected
+								  decoration-warning  → late (not very late), no mismatch
+								  decoration-info     → scheduled today, not late, no mismatch
+								  decoration-primary  → src done, dest pending, on track
+								  decoration-success  → both pickings done, no mismatch
+								  ─────────────────────────────────────────────────── -->
+								<list decoration-muted="state == 'cancel'" decoration-danger="is_very_late or has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-primary="src_picking_state == 'done' and dest_picking_state != 'done' and not is_late and not has_mismatch" decoration-success="src_picking_state == 'done' and dest_picking_state == 'done' and not has_mismatch" open_form_view="1">
 									<!-- Source side -->
 									<field name="src_picking_id"/>
 									<field name="src_picking_state" widget="badge" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
@@ -109,35 +134,31 @@
 									<field name="is_today" column_invisible="1"/>
 									<field name="is_very_late" column_invisible="1"/>
 									<field name="state" column_invisible="1"/>
+									<field name="src_picking_state" column_invisible="1"/>
+									<field name="dest_picking_state" column_invisible="1"/>
 								</list>
+
 								<form class="o_t4tek_transit_picking">
 									<sheet>
-										<!-- ── Move comparison section ── -->
 										<div class="mt-3">
-
 											<!-- Picking pair info bar -->
 											<div class="d-flex align-items-center px-3 py-2 mb-3 rounded" style="background:#f8f9fa; border:1px solid #dee2e6;">
-
 												<div class="d-flex align-items-center gap-2">
 													<i class="fa fa-sign-out text-muted" title="Source Delivery"/>
 													<span class="fw-bold text-muted small text-uppercase">Source Delivery</span>
 													<field name="src_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold ms-1"/>
 													<field name="src_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
 												</div>
-
 												<i class="fa fa-long-arrow-right fa-lg text-muted mx-3"/>
-
 												<div class="d-flex align-items-center gap-2">
 													<i class="fa fa-sign-in text-muted" title="Destination Receipt"/>
 													<span class="fw-bold text-muted small text-uppercase">Destination Receipt</span>
 													<field name="dest_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold ms-1"/>
 													<field name="dest_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
 												</div>
-
 											</div>
-
 											<!-- Unified comparison table -->
-											<field name="comparison_html" readonly="1" nolabel="1" sanitize="0"/>
+											<field name="comparison_data" widget="t4tek_transit_picking_detail"/>
 										</div>
 									</sheet>
 								</form>
@@ -157,7 +178,9 @@
 		<field name="view_mode">list,form</field>
 		<field name="help" type="html">
 			<p class="o_view_nocontent_smiling_face">Create a new Inter-transit Order</p>
-			<p>Inter-company transits manage the transfer of goods between different companies.Define the source and destination companies, add the products to transfer, and confirm to create the corresponding delivery and receipt orders.</p>
+			<p>Inter-company transits manage the transfer of goods between different companies.
+			Define the source and destination companies, add the products to transfer,
+			and confirm to create the corresponding delivery and receipt orders.</p>
 		</field>
 	</record>
 </odoo>

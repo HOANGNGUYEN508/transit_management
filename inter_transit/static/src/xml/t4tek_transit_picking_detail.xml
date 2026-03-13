@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+	<t t-name="t4tek_transit.TransitPickingDetail">
+
+		<!-- Empty state -->
+		<div t-if="isEmpty" class="text-center text-muted py-4">
+			<i class="fa fa-exchange fa-2x mb-2 d-block opacity-50"/>
+			<span>No transit lines to compare.</span>
+		</div>
+
+		<div t-else="" class="t4tek-transit-picking-detail">
+
+			<!-- ── Comparison table ───────────────────────────────────────── -->
+			<table class="table table-sm align-middle mb-0 transit-comparison-table">
+
+				<colgroup>
+					<col class="col-product"/>
+					<col class="col-expected"/>
+					<col class="col-src-qty"/>
+					<col class="col-dest-qty"/>
+					<col class="col-detail"/>
+					<col class="col-status"/>
+				</colgroup>
+
+				<thead>
+					<tr class="transit-col-header">
+						<th>Product</th>
+						<th class="text-center col-sep-right">Expected</th>
+						<th class="text-center col-sep-right">
+							<i class="fa fa-sign-out me-1 text-source"/>Source
+						</th>
+						<th class="text-center col-sep-right">
+							<i class="fa fa-sign-in me-1 text-dest"/>Destination
+						</th>
+						<th class="text-center col-sep-right" title="Lot / Serial detail">
+							<i class="fa fa-list-ul text-muted"/>
+						</th>
+						<th class="text-center">Status</th>
+					</tr>
+				</thead>
+
+				<tbody>
+					<t t-foreach="lines" t-as="line" t-key="line.product_id">
+						<tr t-att-class="rowClass(line)">
+
+							<td class="transit-product-name">
+								<t t-esc="line.product_name"/>
+							</td>
+
+							<td class="text-center transit-qty-expected col-sep-right">
+								<t t-esc="formatQty(line.expected_qty, line.expected_uom)"/>
+							</td>
+
+							<td class="text-center transit-qty col-sep-right" t-att-class="srcQtyClass(line)">
+								<t t-esc="formatQty(line.src_qty, line.src_uom)"/>
+							</td>
+
+							<td class="text-center transit-qty col-sep-right" t-att-class="destQtyClass(line)">
+								<t t-esc="formatQty(line.dest_qty, line.dest_uom)"/>
+							</td>
+
+							<td class="transit-detail-btn col-sep-right">
+								<button
+									t-if="hasLotData(line)"
+									class="btn btn-sm btn-outline-secondary btn-detail"
+									title="View lot / serial detail"
+									t-on-click="() => this.openLotDialog(line)"
+								>
+									<i class="fa fa-list-ul"/>
+								</button>
+								<span t-else="" class="btn-detail-placeholder"/>
+							</td>
+
+							<td class="transit-status">
+								<t t-foreach="line.status" t-as="s" t-key="s">
+									<span t-att-class="statusBadgeClass(s)" t-att-title="statusLabel(s)">
+										<i t-att-class="statusBadgeIcon(s)"/>
+									</span>
+								</t>
+							</td>
+
+						</tr>
+					</t>
+				</tbody>
+			</table>
+
+			<!-- ── Mismatch summary ───────────────────────────────────────── -->
+			<t t-if="hasMismatches">
+				<div class="alert alert-danger transit-mismatch-summary">
+					<div class="mismatch-summary-title">
+						<i class="fa fa-exclamation-triangle me-1"/>
+						Mismatch Summary
+					</div>
+					<ul class="mismatch-summary-list">
+						<t t-foreach="mismatchLines" t-as="line" t-key="line.product_id">
+							<li class="mismatch-summary-product">
+
+								<!-- Product name + top-level status labels -->
+								<span class="fw-semibold"><t t-esc="line.product_name"/></span>
+								<span class="ms-2">
+									<t t-foreach="line.status" t-as="s" t-key="s">
+										<t t-if="s !== 'ok' and s !== 'pending'">
+											<span t-att-class="'me-1 ' + mismatchSummaryClass(s)">
+												<i t-att-class="mismatchIcon(s) + ' me-1'"/>
+												<t t-esc="statusLabel(s)"/>
+											</span>
+										</t>
+									</t>
+								</span>
+
+								<!-- Per-lot detail lines -->
+								<ul class="mismatch-detail-list">
+									<t t-foreach="mismatchDetails(line)" t-as="detail" t-key="detail_index">
+										<li t-att-class="detail.cls">
+											<i t-att-class="detail.icon + ' me-1'"/>
+
+											<!-- qty_diff: LotName: source — [1 Units] ≠ destination — [2 Units] -->
+											<t t-if="detail.type === 'qty_diff'">
+												<span class="detail-lot-name"><t t-esc="detail.lot"/>:</span>
+												<span class="ms-1">source &#8212; <span class="detail-qty-highlight"><t t-esc="detail.srcQty"/></span></span>
+												<span class="mx-1">&#8800;</span>
+												<span>destination &#8212; <span class="detail-qty-highlight"><t t-esc="detail.destQty"/></span></span>
+											</t>
+
+											<!-- src_only with lot: [LotName] [qty] — dispatched but not received -->
+											<t t-elif="detail.type === 'src_only' and detail.lot">
+												<span class="detail-lot-name"><t t-esc="detail.lot"/></span>
+												<span class="detail-qty-highlight ms-1"><t t-esc="detail.qty"/></span>
+												<span class="ms-1">&#8212; dispatched but not received</span>
+											</t>
+
+											<!-- dest_only with lot: [LotName] [qty] — received but not dispatched -->
+											<t t-elif="detail.type === 'dest_only' and detail.lot">
+												<span class="detail-lot-name"><t t-esc="detail.lot"/></span>
+												<span class="detail-qty-highlight ms-1"><t t-esc="detail.qty"/></span>
+												<span class="ms-1">&#8212; received but not dispatched</span>
+											</t>
+
+											<!-- src_only / dest_only without lot (no lot tracking): [qty] dispatched/received -->
+											<t t-elif="detail.type === 'src_only'">
+												<span class="detail-qty-highlight me-1"><t t-esc="detail.qty"/></span>
+												<span>dispatched &#8212; nothing received at destination</span>
+											</t>
+											<t t-elif="detail.type === 'dest_only'">
+												<span class="detail-qty-highlight me-1"><t t-esc="detail.qty"/></span>
+												<span>received &#8212; nothing dispatched from source</span>
+											</t>
+
+											<!-- fallback: plain text (missing) -->
+											<t t-else="">
+												<t t-esc="detail.text"/>
+											</t>
+
+										</li>
+									</t>
+								</ul>
+
+							</li>
+						</t>
+					</ul>
+				</div>
+			</t>
+
+		</div>
+	</t>
+
+</templates>

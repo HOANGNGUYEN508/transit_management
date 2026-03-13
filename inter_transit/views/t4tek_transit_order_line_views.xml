@@ -1,15 +1,21 @@
 <odoo>
+	<!-- ─────────────────────────────────────────────────────────────────────
+	  Color-theme legend (order line level)
+	  ─────────────────────────────────────────────────────────────────────
+	  decoration-warning → transit done + quantity == 0
+	                        nothing received for this product  (🟡 product issue)
+	  decoration-danger  → transit done + quantity > 0 but ≠ demanded
+	                        received qty is wrong              (🟠 qty issue,
+	                        closest Odoo list decoration to orange)
+	  decoration-muted   → transit cancelled
+	  ───────────────────────────────────────────────────────────────────── -->
+
 	<record id="view_t4tek_transit_order_line_tree" model="ir.ui.view">
 		<field name="name">t4tek.transit.order.line.tree</field>
 		<field name="model">t4tek.transit.order.line</field>
 		<field name="arch" type="xml">
-			<list>
-				<field 
-					name="state" 
-					optional="hide"
-					widget="badge" 
-					decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"
-				/>
+			<list decoration-muted="state == 'cancel'" decoration-warning="state == 'done' and quantity == 0" decoration-danger="state == 'done' and quantity > 0 and quantity != product_uom_qty">
+				<field name="state" optional="hide" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"/>
 				<field name="product_uom_category_id" column_invisible="1"/>
 				<field name="company_id" optional="hide"/>
 
@@ -39,7 +45,7 @@
 							<field name="product_uom_category_id" invisible="1"/>
 						</group>
 						<group>
-							<field name="quantity" readonly="1" decoration-info="1"/>
+							<field name="quantity" readonly="1" decoration-success="quantity > 0 and quantity == product_uom_qty" decoration-warning="state == 'done' and quantity == 0" decoration-danger="state == 'done' and quantity > 0 and quantity != product_uom_qty"/>
 							<field name="state"/>
 						</group>
 					</group>

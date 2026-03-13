@@ -36,10 +36,16 @@
         "security/ir.model.access.csv",
         "data/menu.xml",
     ],
-    # 'assets': {
-    #     'web.assets_backend': [
-    #     ]
-    # },
+    'assets': {
+        'web.assets_backend': [
+            'inter_transit/static/src/xml/t4tek_transit_picking_detail.xml',
+            'inter_transit/static/src/js/t4tek_transit_picking_detail.js',
+            'inter_transit/static/src/xml/t4tek_transit_picking_dialog.xml',
+            'inter_transit/static/src/js/t4tek_transit_picking_dialog.js',
+            'inter_transit/static/src/scss/t4tek_transit_picking.scss',
+            # 'token_management/static/src/css/encode_qr_image.css',
+        ],
+    },
     "post_init_hook": "_hook_inter_transit",
     "installable": True,
     "application": True,

@@ -3,7 +3,7 @@
 		<!-- ====================================================================== -->
 		<!-- Setup inter_transit Module Requirements -->
 		<!-- ====================================================================== -->
-		
+
 		<!-- Action: Create transit warehouse and setup picking types -->
 		<record id="action_create_transit_warehouse" model="ir.actions.server">
 			<field name="name">Create Transit Warehouse and Setup</field>
@@ -20,8 +20,7 @@ for company in records:
             # Setup transit picking types for this company (only if it has real warehouses)
             has_real_wh = bool(env['stock.warehouse'].sudo().search([
                 ('company_id', '=', company.id),
-                ('name', 'not like', '.TRANSIT'),
-                ('lot_stock_id.usage', '=', 'internal'),
+                ('is_t4tek_transit_warehouse', '=', False),
             ], limit=1))
             if has_real_wh:
                 company.sudo()._create_warehouse_transit_picking_types()
@@ -30,8 +29,7 @@ for company in records:
             for child in company.child_ids:
                 child_has_real_wh = bool(env['stock.warehouse'].sudo().search([
                     ('company_id', '=', child.id),
-                    ('name', 'not like', '.TRANSIT'),
-                    ('lot_stock_id.usage', '=', 'internal'),
+                    ('is_t4tek_transit_warehouse', '=', False),
                 ], limit=1))
                 if child_has_real_wh:
                     child.sudo()._create_warehouse_transit_picking_types()
@@ -52,7 +50,6 @@ for company in records:
 for warehouse in records:
     if warehouse.company_id:
         try:
-            # Create transit picking types for this specific warehouse 
             warehouse.company_id.sudo()._create_warehouse_transit_picking_types(warehouse=warehouse)
         except Exception as e:
             raise Exception("Error creating transit picking types for warehouse: %s" % str(e))
@@ -79,28 +76,28 @@ if records:
 		<!-- Wrapper Calls: Business logic in t4tek.transit.picking model methods -->
 		<!-- ====================================================================== -->
 
-		<!-- Rule 1: SRC picking done - Call wrapper function -->
+		<!-- Rule 1: SRC picking done - batch search, single model call -->
 		<record id="action_transit_src_picking_done" model="ir.actions.server">
 			<field name="name">Transit: Src Picking Done</field>
 			<field name="model_id" ref="stock.model_stock_picking"/>
 			<field name="state">code</field>
 			<field name="base_automation_id" ref="automation_transit_src_picking_done"/>
 			<field name="code">
-# Find transit picking pair for this SRC picking
-transit_picking = env['t4tek.transit.picking'].search([
-    ('src_picking_id', '=', record.id)
-], limit=1)
+# Batch: find all transit picking pairs whose SRC picking is in this trigger batch
+transit_pickings = env['t4tek.transit.picking'].search([
+    ('src_picking_id', 'in', records.ids)
+])
 
-if transit_picking:
+if transit_pickings:
     try:
-        # Call wrapper function - business logic hidden in model
-        transit_picking.automation_handle_src_picking_done()
+        transit_pickings.automation_handle_src_picking_done()
     except Exception as e:
         raise Exception("Transit automation error: %s" % str(e))
 			</field>
 		</record>
 
 		<!-- Rule 2: SRC backorder ready - Create dest backorder and sync moves -->
+		<!-- Already batch-aware: uses records (plural) -->
 		<record id="action_transit_src_backorder_ready" model="ir.actions.server">
 			<field name="name">Transit: Src Backorder Ready</field>
 			<field name="model_id" ref="stock.model_stock_picking"/>
@@ -121,22 +118,21 @@ if parent_transit_pickings:
 			</field>
 		</record>
 
-		<!-- Rule 3: DEST picking done - Call wrapper function -->
+		<!-- Rule 3: DEST picking done - batch search, single model call -->
 		<record id="action_transit_dest_picking_done" model="ir.actions.server">
 			<field name="name">Transit: Dest Picking Done</field>
 			<field name="model_id" ref="stock.model_stock_picking"/>
 			<field name="state">code</field>
 			<field name="base_automation_id" ref="automation_transit_dest_picking_done"/>
 			<field name="code">
-# Find transit picking pair for this DEST picking
-transit_picking = env['t4tek.transit.picking'].search([
-    ('dest_picking_id', '=', record.id)
-], limit=1)
+# Batch: find all transit picking pairs whose DEST picking is in this trigger batch
+transit_pickings = env['t4tek.transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
 
-if transit_picking:
+if transit_pickings:
     try:
-        # Call wrapper function - business logic hidden in model
-        transit_picking.automation_handle_dest_picking_done()
+        transit_pickings.automation_handle_dest_picking_done()
     except Exception as e:
         raise Exception("Transit automation error: %s" % str(e))
 			</field>

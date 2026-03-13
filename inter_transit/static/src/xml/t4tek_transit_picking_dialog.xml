@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+	<t t-name="t4tek_transit.TransitLotDialog">
+		<Dialog t-props="{ title: title, size: 'md' }">
+
+			<!-- Mismatch alert banner -->
+			<t t-if="props.hasLotMismatch or props.hasQtyMismatch">
+				<div class="alert alert-danger lot-mismatch-alert mb-3">
+					<i class="fa fa-exclamation-triangle me-2"/>
+					<span>
+						<t t-if="props.hasLotMismatch and props.hasQtyMismatch">
+							Lot mismatch and quantity mismatch detected.
+						</t>
+						<t t-elif="props.hasLotMismatch">
+							Lot / serial numbers do not match between source and destination.
+						</t>
+						<t t-elif="props.hasQtyMismatch">
+							Quantities do not match between source and destination.
+						</t>
+					</span>
+				</div>
+			</t>
+
+			<!-- Empty state -->
+			<t t-if="maxRows === 0">
+				<div class="lot-empty-state">
+					<i class="fa fa-inbox fa-2x"/>
+					No lot or serial number data available.
+				</div>
+			</t>
+
+			<!-- Side-by-side lot table — wrapped in border so it's visually separate from the alert -->
+			<t t-else="">
+				<div class="lot-table-wrapper">
+					<table class="table table-sm align-middle mb-0 lot-comparison-table">
+						<colgroup>
+							<col class="col-index"/>
+							<col class="col-src"/>
+							<col class="col-dest"/>
+						</colgroup>
+						<thead>
+							<tr>
+								<th class="text-center col-index-header">#</th>
+								<th class="col-sep-right">
+									<i class="fa fa-sign-out me-1 text-source"/> Source Lot / SN
+								</th>
+								<th>
+									<i class="fa fa-sign-in me-1 text-dest"/> Destination Lot / SN
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<t t-foreach="zippedRows" t-as="row" t-key="row_index">
+								<tr>
+									<td class="text-center lot-row-index">
+										<t t-esc="row_index + 1"/>
+									</td>
+
+									<!-- Source lot cell -->
+									<t t-if="row.src">
+										<td class="lot-name-cell col-sep-right" t-att-class="isSrcLotMismatched(row.src) ? 'table-danger' : ''">
+											<t t-if="row.src.lot">
+												<span t-att-class="isSrcLotMismatched(row.src) ? 'text-danger fw-semibold' : ''">
+													<t t-esc="row.src.lot"/>
+												</span>
+												<span class="lot-qty-inline"> -	<t t-esc="formatQty(row.src.qty)"/>
+												</span>
+											</t>
+											<t t-else="">
+												<span class="text-muted fst-italic">No lot</span>
+											</t>
+										</td>
+									</t>
+									<t t-else="">
+										<td class="lot-name-cell col-sep-right text-muted fst-italic">&#8212;</td>
+									</t>
+
+									<!-- Dest lot cell -->
+									<t t-if="row.dest">
+										<td class="lot-name-cell" t-att-class="isDestLotMismatched(row.dest) ? 'table-danger' : ''">
+											<t t-if="row.dest.lot">
+												<span t-att-class="isDestLotMismatched(row.dest) ? 'text-danger fw-semibold' : ''">
+													<t t-esc="row.dest.lot"/>
+												</span>
+												<span class="lot-qty-inline"> - <t t-esc="formatQty(row.dest.qty)"/>
+												</span>
+											</t>
+											<t t-else="">
+												<span class="text-muted fst-italic">No lot</span>
+											</t>
+										</td>
+									</t>
+									<t t-else="">
+										<td class="lot-name-cell text-muted fst-italic">&#8212;</td>
+									</t>
+
+								</tr>
+							</t>
+						</tbody>
+					</table>
+				</div>
+			</t>
+
+			<!-- Dialog footer -->
+			<t t-set-slot="footer">
+				<button class="btn btn-secondary" t-on-click="props.close">Close</button>
+			</t>
+		</Dialog>
+	</t>
+
+</templates>

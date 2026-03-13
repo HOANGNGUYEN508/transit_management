@@ -27,7 +27,7 @@ class T4tekTransitOrder(models.Model):
     
     Case 2: Mother orders Self → Child
     ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-    │  Mother     │   OUT   │   Mother     │   IN    │  Child      │
+    │  Mother     │   OUT   │   Mother     │   IN    │   Child     │
     │   Stock     │ ──────> │   TRANSIT    │ ──────> │   Stock     │
     └─────────────┘         └──────────────┘         └─────────────┘
 
@@ -78,6 +78,13 @@ class T4tekTransitOrder(models.Model):
     the transit location itself has a relation to a specific company (relation field from the company) 
     to indicate that it belongs to that company for stock reporting purposes.
 
+    Matching Strategy (product-based):
+    - Moves between src/dest pickings are matched by product_id.
+    - No persistent link field on stock.move is required.
+    - This means the transit is resilient to move deletion/recreation.
+    - Limitation: if two lines in the same transit share the same product, only the
+      first match is used (aggregate or split into separate transits instead).
+
     Key Components:
     - t4tek.transit.order.line: User-defined transit lines.
     - t4tek.transit.picking: Mapping src/dest pickings with transit location.
@@ -90,7 +97,7 @@ class T4tekTransitOrder(models.Model):
     
     name = fields.Char(
         'Reference', 
-        readonly=True,
+        readonly=False,
         copy=False,
         required=True,
         default='New',
@@ -119,33 +126,13 @@ class T4tekTransitOrder(models.Model):
         tracking=True,
     )
     
-    # Transit location computed from company relationships
+    # Transit location — resolved and written by action_confirm (via _validate_and_get_companies)
     transit_location_id = fields.Many2one(
         'stock.location',
         string='Transit Location',
-        compute='_compute_transit_location',
         store=True,
         readonly=True,
-        help="Transit location based on parent company"
-    )
-    
-    # Operation Types determined automatically via transit picking type configs
-    t4tek_src_transit_picking_type_id = fields.Many2one(
-        't4tek.transit.picking.type',
-        string='Source Transit Picking Type',
-        compute='_compute_transit_picking_types',
-        store=True,
-        readonly=True,
-        help="Transit picking type configuration used for source company"
-    )
-    
-    t4tek_dest_transit_picking_type_id = fields.Many2one(
-        't4tek.transit.picking.type',
-        string='Destination Transit Picking Type',
-        compute='_compute_transit_picking_types',
-        store=True,
-        readonly=True,
-        help="Transit picking type configuration used for destination company"
+        help="Transit location based on parent company. Populated on confirm."
     )
     
     # Domain for allowed companies
@@ -213,8 +200,8 @@ class T4tekTransitOrder(models.Model):
 
     @api.depends('transit_picking_ids')
     def _compute_has_done_pickings(self):
-      for rec in self:
-        rec.has_done_pickings = any(tp.state == 'done' for tp in rec.transit_picking_ids)
+        for rec in self:
+            rec.has_done_pickings = any(tp.state == 'done' for tp in rec.transit_picking_ids)
                 
     @api.depends('company_id')
     def _compute_allowed_company_ids(self):
@@ -225,59 +212,6 @@ class T4tekTransitOrder(models.Model):
                 record.allowed_company_ids = allowed
             else:
                 record.allowed_company_ids = self.env['res.company']
-    
-    @api.depends('src_company_id', 'dest_company_id', 'company_id')
-    def _compute_transit_location(self):
-        """Compute the transit location based on company relationships"""
-        for transit in self:
-            if not transit.src_company_id or not transit.dest_company_id:
-                transit.transit_location_id = False
-                continue
-            
-            parent_company = self._get_parent_company(
-                transit.src_company_id, 
-                transit.dest_company_id
-            )
-            
-            if parent_company:
-                transit_location = parent_company._get_transit_location()
-                transit.transit_location_id = transit_location.id if transit_location else False
-            else:
-                transit.transit_location_id = False
-    
-    @api.depends('src_company_id', 'dest_company_id', 'transit_location_id')
-    def _compute_transit_picking_types(self):
-        """
-        Compute transit picking type configurations based on transit location
-        
-        Note: Must filter by transit_location_id to select the correct configuration.
-        A company can have up to 2 transit picking type configs (one for parent's transit location,
-        one for its own transit location). We must pick the one matching the computed transit_location_id.
-        """
-        for transit in self:
-            # Must have transit location computed first
-            if not transit.transit_location_id:
-                transit.t4tek_src_transit_picking_type_id = False
-                transit.t4tek_dest_transit_picking_type_id = False
-                continue
-            
-            if transit.src_company_id:
-                src_config = self.env['t4tek.transit.picking.type'].search([
-                    ('company_id', '=', transit.src_company_id.id),
-                    ('transit_location_id', '=', transit.transit_location_id.id)
-                ], order='create_date ASC', limit=1)
-                transit.t4tek_src_transit_picking_type_id = src_config.id if src_config else False
-            else:
-                transit.t4tek_src_transit_picking_type_id = False
-            
-            if transit.dest_company_id:
-                dest_config = self.env['t4tek.transit.picking.type'].search([
-                    ('company_id', '=', transit.dest_company_id.id),
-                    ('transit_location_id', '=', transit.transit_location_id.id)
-                ], order='create_date ASC', limit=1)
-                transit.t4tek_dest_transit_picking_type_id = dest_config.id if dest_config else False
-            else:
-                transit.t4tek_dest_transit_picking_type_id = False
     
     def _get_parent_company(self, start_company, end_company):
         """Get the parent company for the transit relationship"""
@@ -327,78 +261,85 @@ class T4tekTransitOrder(models.Model):
         ), self.env['res.company']
 
     def _validate_and_get_companies(self, transits):
-        """
-        Validate transit authorization and company setup
-        """
         errors = []
         all_companies = self.env['res.company']
         transit_config_map = {}
         transit_parent_map = {}
-        
+
         for transit in transits:
             ordering_company = transit.company_id
-            start_company = transit.src_company_id
-            end_company = transit.dest_company_id
-            
-            # Validate authorization
+            start_company    = transit.src_company_id
+            end_company      = transit.dest_company_id
+
+            # ── 1. Authorisation check ────────────────────────────────────────
             is_valid, error_msg, parent_company = self._validate_transit_authorization(
                 ordering_company, start_company, end_company
             )
-            
             if not is_valid:
                 errors.append(f"Transit '{transit.name}': {error_msg}")
                 continue
-            
-            # CHANGED: Check for transit warehouse/location through helper method
-            transit_location = parent_company._get_transit_location()
+
+            # ── 2. Resolve relation_type per company ──────────────────────────
+            def _relation_type(company):
+                return 'parent_to_child' if company == parent_company else 'child_to_parent'
+
+            # ── 3. Look up picking-type configs ───────────────────────────────
+            src_config = self.env['t4tek.transit.picking.type'].search([
+                ('company_id', '=', start_company.id),
+                ('relation_type', '=', _relation_type(start_company)),
+            ], order='create_date ASC', limit=1)
+            if not src_config:
+                errors.append(
+                    f"Transit '{transit.name}': No transit picking type configuration "
+                    f"for source company '{start_company.name}' "
+                    f"(relation: {_relation_type(start_company)})"
+                )
+                continue
+
+            dest_config = self.env['t4tek.transit.picking.type'].search([
+                ('company_id', '=', end_company.id),
+                ('relation_type', '=', _relation_type(end_company)),
+            ], order='create_date ASC', limit=1)
+            if not dest_config:
+                errors.append(
+                    f"Transit '{transit.name}': No transit picking type configuration "
+                    f"for destination company '{end_company.name}' "
+                    f"(relation: {_relation_type(end_company)})"
+                )
+                continue
+
+            # ── 4. Derive transit location from src config ────────────────────
+            transit_location = src_config.src_picking_type_id.default_location_dest_id
             if not transit_location:
                 errors.append(
-                    f"Transit '{transit.name}': Parent company '{parent_company.name}' "
-                    f"has no transit warehouse or transit location"
+                    f"Transit '{transit.name}': Source picking type has no destination location configured"
                 )
                 continue
-            
-            # Check transit picking type configs
-            if not transit.t4tek_src_transit_picking_type_id:
-                errors.append(
-                    f"Transit '{transit.name}': No transit picking type configuration "
-                    f"for source company '{start_company.name}'"
-                )
-                continue
-            
-            if not transit.t4tek_dest_transit_picking_type_id:
-                errors.append(
-                    f"Transit '{transit.name}': No transit picking type configuration "
-                    f"for destination company '{end_company.name}'"
-                )
-                continue
-            
-            all_companies |= start_company
-            all_companies |= end_company
-            all_companies |= parent_company
-            
+
+            # ── 5. Persist resolved values ────────────────────────────────────
+            transit.write({'transit_location_id': transit_location.id})
+
+            all_companies |= start_company | end_company | parent_company
             transit_parent_map[transit.id] = parent_company
-            
             transit_config_map[transit.id] = {
-                'src_config': transit.t4tek_src_transit_picking_type_id,
-                'dest_config': transit.t4tek_dest_transit_picking_type_id,
+                'src_config':  src_config,
+                'dest_config': dest_config,
             }
-        
+
         if errors:
             raise UserError('Validation issues:\n• ' + '\n• '.join(errors))
-        
+
         return all_companies, transit_config_map, transit_parent_map
 
     def _create_transfer_pickings(self, transits, transit_config_map, transit_parent_map):
         """
-        Create picking pairs for DRAFT transits
+        Create picking pairs for DRAFT transits.
         
         Returns: dict {transit_id: {'transit_picking': record, 'start': picking, 'end': picking, 'transit_location': location}}
         """
         transit_picking_map = {}
         errors = []
         
-        # Validate all transits are draft
         non_draft = transits.filtered(lambda t: t.state != 'draft')
         if non_draft:
             errors.append(
@@ -408,7 +349,6 @@ class T4tekTransitOrder(models.Model):
         
         draft_transits = transits.filtered(lambda t: t.state == 'draft')
         
-        # Prepare data for batch creation
         start_picking_vals_list = []
         end_picking_vals_list = []
         transit_data_list = []
@@ -422,15 +362,14 @@ class T4tekTransitOrder(models.Model):
                 errors.append(f"Transit '{transit.name}': No parent company found")
                 continue
             
-            transit_location = parent_company._get_transit_location()
-            
+            # transit_location_id already written by _validate_and_get_companies — no re-query needed
+            transit_location = transit.transit_location_id
             if not transit_location:
                 errors.append(
-                    f"Transit '{transit.name}': No transit location for parent '{parent_company.name}'"
+                    f"Transit '{transit.name}': transit_location_id not set (validate first)"
                 )
                 continue
-            
-            # Get picking types from config
+
             config = transit_config_map.get(transit.id)
             if not config:
                 errors.append(f"Transit '{transit.name}': No picking type configuration")
@@ -442,7 +381,6 @@ class T4tekTransitOrder(models.Model):
             src_type = src_config.src_picking_type_id
             dest_type = dest_config.dest_picking_type_id
             
-            # Prepare OUT picking values (NO manual location assignment)
             start_picking_vals_list.append({
                 'partner_id': end_company.partner_id.id,
                 'picking_type_id': src_type.id,
@@ -451,7 +389,6 @@ class T4tekTransitOrder(models.Model):
                 'origin': transit.name,
             })
             
-            # Prepare IN picking values (NO manual location assignment)
             end_picking_vals_list.append({
                 'partner_id': start_company.partner_id.id,
                 'picking_type_id': dest_type.id,
@@ -460,10 +397,7 @@ class T4tekTransitOrder(models.Model):
                 'origin': transit.name,
             })
             
-            transit_data_list.append({
-                'transit': transit,
-                'transit_location': transit_location,
-            })
+            transit_data_list.append({'transit': transit})
         
         if errors:
             raise UserError('Picking validation errors:\n• ' + '\n• '.join(errors))
@@ -471,19 +405,16 @@ class T4tekTransitOrder(models.Model):
         if not start_picking_vals_list:
             return transit_picking_map
         
-        # Batch create all source pickings
         try:
             src_pickings = self.env['stock.picking'].sudo().create(start_picking_vals_list)
         except Exception as e:
             raise UserError(f'Failed to batch create source pickings: {str(e)}')
         
-        # Batch create all destination pickings
         try:
             dest_pickings = self.env['stock.picking'].sudo().create(end_picking_vals_list)
         except Exception as e:
             raise UserError(f'Failed to batch create destination pickings: {str(e)}')
         
-        # Validate creation
         if len(src_pickings) != len(dest_pickings) or len(src_pickings) != len(transit_data_list):
             raise UserError(
                 f'Picking creation mismatch: '
@@ -491,14 +422,12 @@ class T4tekTransitOrder(models.Model):
                 f'{len(transit_data_list)} expected'
             )
         
-        # Create t4tek.transit.picking records
         transit_picking_vals_list = []
         for i, transit_data in enumerate(transit_data_list):
             transit = transit_data['transit']
             src_picking = src_pickings[i]
             dest_picking = dest_pickings[i]
             
-            # Verify location match (locations set by picking type)
             if src_picking.location_dest_id.id != dest_picking.location_id.id:
                 errors.append(
                     f"Transit '{transit.name}': Location mismatch! "
@@ -516,7 +445,6 @@ class T4tekTransitOrder(models.Model):
         if errors:
             raise UserError('Picking errors:\n• ' + '\n• '.join(errors))
         
-        # Batch create transit picking pairs
         try:
             transit_pickings = self.env['t4tek.transit.picking'].sudo().create(
                 transit_picking_vals_list
@@ -524,21 +452,21 @@ class T4tekTransitOrder(models.Model):
         except Exception as e:
             raise UserError(f'Failed to create transit picking pairs: {str(e)}')
         
-        # Build result map
         for i, transit_data in enumerate(transit_data_list):
             transit = transit_data['transit']
-            transit_location = transit_data['transit_location']
-            
             transit_picking_map[transit.id] = {
                 'transit_picking': transit_pickings[i],
                 'start': src_pickings[i],
                 'end': dest_pickings[i],
-                'transit_location': transit_location,
             }
         
         return transit_picking_map
 
     def _create_moves_for_transit(self, transit, src_picking, dest_picking):
+        """
+        Create stock moves for a transit order.
+        Moves are matched to transit lines by product_id — no persistent link field needed.
+        """
         if not transit.line_ids:
             return
 
@@ -566,11 +494,11 @@ class T4tekTransitOrder(models.Model):
                 'product_id': product.id,
                 'product_uom_qty': qty,
                 'product_uom': product.uom_id.id,
-                't4tek_transit_line_id': line.id,
+                # No t4tek_transit_line_id — matching is done by product_id at runtime
             }
 
-            out_move_vals_list.append({**common,'picking_id': src_picking.id,'company_id': src_picking.company_id.id})
-            in_move_vals_list.append({ **common,'picking_id': dest_picking.id,'company_id': dest_picking.company_id.id})
+            out_move_vals_list.append({**common, 'picking_id': src_picking.id, 'company_id': src_picking.company_id.id})
+            in_move_vals_list.append({**common, 'picking_id': dest_picking.id, 'company_id': dest_picking.company_id.id})
 
         try:
             self.env['stock.move'].sudo().create(out_move_vals_list)
@@ -582,6 +510,134 @@ class T4tekTransitOrder(models.Model):
         except Exception as e:
             raise UserError(f"Failed to create IN moves: {str(e)}")
 
+    def _merge_duplicate_lines(self, transits):
+        """
+        Merge transit order lines that share the same product_id within each transit.
+
+        This is a prerequisite for product-based move matching, which requires at most
+        one line (and therefore one move) per product per picking.
+
+        Merge rules:
+        - All quantities are converted to the product's base UOM before summing.
+        - The first line (lowest id) survives; the rest are deleted.
+        - The surviving line is updated to: base UOM + summed quantity.
+        - A single line whose UOM already differs from the base UOM is also normalised
+          to the base UOM so that the picking moves are always created in base UOM.
+        - Notes from duplicate lines are concatenated onto the surviving line (separated
+          by " | ") so that no information is silently lost.
+
+        All DB writes happen in two batched operations:
+          1. One write() per unique (uom_id, qty) combination across all surviving lines.
+          2. One unlink() for all lines to be deleted.
+
+        Returns a summary dict for logging:
+          {transit.id: [(product_name, original_count, merged_qty_in_base_uom), ...]}
+        """
+        if not transits:
+            return {}
+
+        lines_to_delete = self.env['t4tek.transit.order.line']
+        # {line.id: {'product_uom': uom_id, 'product_uom_qty': qty, 'note': str}}
+        lines_to_update = {}
+        summary = {}
+
+        for transit in transits:
+            if not transit.line_ids:
+                continue
+
+            # Group lines by product_id, preserving insertion order (lowest id first)
+            groups = {}  # {product_id: [line, ...]}
+            for line in transit.line_ids.sorted('id'):
+                pid = line.product_id.id
+                groups.setdefault(pid, []).append(line)
+
+            transit_summary = []
+
+            for product_id, group_lines in groups.items():
+                product   = group_lines[0].product_id
+                base_uom  = product.uom_id
+                survivor  = group_lines[0]
+
+                if len(group_lines) == 1:
+                    line = group_lines[0]
+                    current_uom = line.product_uom or base_uom
+
+                    if current_uom.id != base_uom.id:
+                        # Normalise single line to base UOM
+                        qty_in_base = current_uom._compute_quantity(
+                            line.product_uom_qty, base_uom, rounding_method='HALF-UP'
+                        )
+                        lines_to_update[line.id] = {
+                            'product_uom':     base_uom.id,
+                            'product_uom_qty': qty_in_base,
+                        }
+                    # Nothing to merge; skip summary entry
+                    continue
+
+                # Multiple lines for same product — merge into survivor
+                total_qty = 0.0
+                collected_notes = []
+
+                for line in group_lines:
+                    uom = line.product_uom or base_uom
+                    if uom.id != base_uom.id:
+                        qty_in_base = uom._compute_quantity(
+                            line.product_uom_qty, base_uom, rounding_method='HALF-UP'
+                        )
+                    else:
+                        qty_in_base = line.product_uom_qty
+                    total_qty += qty_in_base
+
+                    if line.note:
+                        collected_notes.append(line.note.strip())
+
+                # Survivor gets the merged total and the base UOM
+                merged_note = ' | '.join(filter(None, collected_notes)) or survivor.note or False
+                lines_to_update[survivor.id] = {
+                    'product_uom':     base_uom.id,
+                    'product_uom_qty': total_qty,
+                    'note':            merged_note,
+                }
+
+                # All other lines in the group are redundant
+                for line in group_lines[1:]:
+                    lines_to_delete |= line
+
+                transit_summary.append((product.display_name, len(group_lines), total_qty))
+                _logger.info(
+                    "Transit '%s': merged %d lines for product '%s' → %.4f %s",
+                    transit.name, len(group_lines), product.display_name,
+                    total_qty, base_uom.name,
+                )
+
+            if transit_summary:
+                summary[transit.id] = transit_summary
+
+        # ── Batch delete redundant lines ──────────────────────────────────────
+        if lines_to_delete:
+            lines_to_delete.with_context(transit_pickings_sync=True).unlink()
+            _logger.info("Merge: deleted %d duplicate transit line(s)", len(lines_to_delete))
+
+        # ── Batch write surviving lines ───────────────────────────────────────
+        # Group by identical update values for maximum batch efficiency
+        if lines_to_update:
+            buckets = {}  # {frozenset(vals.items()): [line_id, ...]}
+            for line_id, vals in lines_to_update.items():
+                key = frozenset(vals.items())
+                buckets.setdefault(key, []).append(line_id)
+
+            for vals_key, line_ids in buckets.items():
+                self.env['t4tek.transit.order.line'].with_context(
+                    transit_pickings_sync=True
+                ).browse(line_ids).write(dict(vals_key))
+
+            _logger.info(
+                "Merge: updated %d surviving transit line(s) in %d batch(es)",
+                len(lines_to_update), len(buckets),
+            )
+
+        return summary
+
     def action_confirm(self):
         """
         Initiate transit process
@@ -589,11 +645,9 @@ class T4tekTransitOrder(models.Model):
         if not self:
             return True
         
-        # Separate transits by state
         draft = self.filtered(lambda t: t.state == 'draft')
         cancel = self.filtered(lambda t: t.state == 'cancel')
         
-        # Reject invalid states
         invalid = self - draft - cancel
         if invalid:
             state_names = dict(self._fields['state'].selection)
@@ -602,34 +656,35 @@ class T4tekTransitOrder(models.Model):
                 states.append(f"and {len(invalid) - 5} more")
             raise UserError(f'Cannot confirm from states: {", ".join(states)}')
         
-        # Process both cancel and draft
         to_process = cancel | draft
         
         if not to_process:
             return True
         
-        # Validate lines exist
         empty = to_process.filtered(lambda t: not t.line_ids)
         if empty:
             names = empty[:10].mapped('name')
             if len(empty) > 10:
                 names.append(f"and {len(empty) - 10} more")
             raise UserError(f'No moves defined for transits: {", ".join(names)}')
+
+        # Merge duplicate-product lines before any picking/move work.
+        # This guarantees product-based matching works cleanly (1 line per product).
+        self._merge_duplicate_lines(to_process)
         
-        # Validate and get company setup
         all_companies, transit_config_map, transit_parent_map = self._validate_and_get_companies(to_process)
         
-        # Separate transits with/without existing pickings
         with_pickings = to_process.filtered(lambda t: t.transit_picking_ids)
         without_pickings = to_process - with_pickings
         
-        # ===== INLINE: Handle transits WITH existing pickings =====
+        # ===== Handle transits WITH existing pickings =====
         if with_pickings:
+            with_pickings.write({'state': 'assigned'})
+            
             errors = []
             transit_picking_map = {}
             
             for transit in with_pickings:
-                # Get first transit picking pair
                 transit_picking = transit.transit_picking_ids.filtered(lambda tp: tp.exists())
                 if not transit_picking:
                     errors.append(f"Transit '{transit.name}': No valid transit picking found")
@@ -643,21 +698,17 @@ class T4tekTransitOrder(models.Model):
                     'transit_picking': transit_picking,
                     'start': src_picking,
                     'end': dest_picking,
-                    'transit_location': transit.transit_location_id,
                 }
                 
-                # Check if pickings have moves
                 has_moves = bool(src_picking.move_ids or dest_picking.move_ids)
                 
                 if has_moves:
-                    # Pickings have moves → sync lines to moves
                     try:
                         self._sync_lines_to_pickings(transit)
                         _logger.info(f"Transit '{transit.name}': Synced lines to existing moves")
                     except Exception as e:
                         errors.append(f"Transit '{transit.name}': Failed to sync lines: {str(e)}")
                 else:
-                    # Pickings don't have moves → create moves
                     try:
                         self._create_moves_for_transit(transit, src_picking, dest_picking)
                         _logger.info(f"Transit '{transit.name}': Created moves from lines")
@@ -667,7 +718,6 @@ class T4tekTransitOrder(models.Model):
             if errors:
                 raise UserError('Reconfirm errors:\n• ' + '\n• '.join(errors))
             
-            # Confirm OUT pickings that aren't already confirmed
             src_pickings = self.env['stock.picking']
             for picking_info in transit_picking_map.values():
                 if picking_info['start'].state == 'draft':
@@ -675,20 +725,15 @@ class T4tekTransitOrder(models.Model):
             
             if src_pickings:
                 self._batch_confirm_pickings(src_pickings)
-            
-            # INLINE: Update state directly (was _update_transit_state_and_refs)
-            with_pickings.write({'state': 'assigned'})
         
-        # ===== INLINE: Handle transits WITHOUT existing pickings =====
+        # ===== Handle transits WITHOUT existing pickings =====
         if without_pickings:
-            # Create picking pairs
             transit_picking_map = self._create_transfer_pickings(
                 without_pickings,
                 transit_config_map,
                 transit_parent_map
             )
             
-            # Create moves directly
             errors = []
             for transit in without_pickings:
                 picking_info = transit_picking_map.get(transit.id)
@@ -708,7 +753,6 @@ class T4tekTransitOrder(models.Model):
             if errors:
                 raise UserError('Move creation errors:\n• ' + '\n• '.join(errors))
             
-            # Confirm OUT pickings
             src_pickings = self.env['stock.picking']
             for picking_info in transit_picking_map.values():
                 src_pickings |= picking_info['start'].sudo()
@@ -716,7 +760,6 @@ class T4tekTransitOrder(models.Model):
             if src_pickings:
                 self._batch_confirm_pickings(src_pickings)
             
-            # INLINE: Update state directly
             without_pickings.write({'state': 'assigned'})
         
         return True
@@ -744,6 +787,17 @@ class T4tekTransitOrder(models.Model):
             raise UserError('Picking confirmation errors:\n• ' + '\n• '.join(confirm_errors))
     
     def _sync_lines_to_pickings(self, transits):
+        """
+        Sync transit order lines → stock moves on both src and dest pickings.
+
+        Matching is product-based: each line is matched to existing moves by product_id.
+        Moves whose product is no longer in the transit lines are deleted.
+        New lines get new moves created.
+        Existing moves get their quantity updated if it changed.
+
+        Limitation: if two lines share the same product_id only the first is matched;
+        consolidate duplicate-product lines before confirming.
+        """
         errors = []
         moves_to_update  = {}
         moves_to_delete  = self.env['stock.move']
@@ -760,17 +814,18 @@ class T4tekTransitOrder(models.Model):
             dest_picking = transit_picking.dest_picking_id
 
             try:
-                src_by_line = {m.transit_line_id.id: m for m in src_picking.move_ids if m.transit_line_id}
-                dest_by_line = {m.transit_line_id.id: m for m in dest_picking.move_ids if m.transit_line_id}
+                # Match moves by product_id (first occurrence wins for duplicates)
+                src_by_product  = {m.product_id.id: m for m in src_picking.move_ids}
+                dest_by_product = {m.product_id.id: m for m in dest_picking.move_ids}
 
-                current_line_ids = {line.id for line in transit.line_ids}
+                current_product_ids = {line.product_id.id for line in transit.line_ids}
 
-                # Remove moves whose line was deleted
-                for line_id, move in src_by_line.items():
-                    if line_id not in current_line_ids:
+                # Remove moves whose product was deleted from the lines
+                for prod_id, move in src_by_product.items():
+                    if prod_id not in current_product_ids:
                         moves_to_delete |= move
-                for line_id, move in dest_by_line.items():
-                    if line_id not in current_line_ids:
+                for prod_id, move in dest_by_product.items():
+                    if prod_id not in current_product_ids:
                         moves_to_delete |= move
 
                 # Update or create per line
@@ -787,23 +842,30 @@ class T4tekTransitOrder(models.Model):
                         'product_id': product.id,
                         'product_uom_qty': qty,
                         'product_uom': product.uom_id.id,
-                        't4tek_transit_line_id': line.id,
                         'state': 'assigned',
                     }
 
-                    src_move = src_by_line.get(line.id)
+                    src_move = src_by_product.get(product.id)
                     if src_move:
                         if src_move.product_uom_qty != qty:
                             moves_to_update[src_move.id] = {'product_uom_qty': qty}
                     else:
-                        create_vals_list.append({**common_create, 'picking_id': src_picking.id, 'company_id': src_picking.company_id.id})
+                        create_vals_list.append({
+                            **common_create,
+                            'picking_id': src_picking.id,
+                            'company_id': src_picking.company_id.id,
+                        })
 
-                    dest_move = dest_by_line.get(line.id)
+                    dest_move = dest_by_product.get(product.id)
                     if dest_move:
                         if dest_move.product_uom_qty != qty:
                             moves_to_update[dest_move.id] = {'product_uom_qty': qty}
                     else:
-                        create_vals_list.append({**common_create, 'picking_id': dest_picking.id, 'company_id': dest_picking.company_id.id})
+                        create_vals_list.append({
+                            **common_create,
+                            'picking_id': dest_picking.id,
+                            'company_id': dest_picking.company_id.id,
+                        })
 
             except Exception as e:
                 errors.append(f"Transit '{transit.name}': {str(e)}")
@@ -833,49 +895,137 @@ class T4tekTransitOrder(models.Model):
             except Exception as e:
                 raise UserError(f'Failed to create moves: {str(e)}')
 
-    def action_cancel(self):
-        """Cancel transit"""
-        errors = []
-        
+    def _sync_scheduled_date_to_pickings(self):
+        """
+        Push the transit order's scheduled_date to every non-terminal picking pair.
+    
+        Called automatically from write() when scheduled_date changes on a
+        draft/assigned transit that already has picking pairs.
+        """
         for transit in self:
-            if transit.state in ['done', 'cancel', 'in_progress']:
-                errors.append(
-                    f"'{transit.name}': Cannot cancel in state '{transit.state}'"
-                )
+            if not transit.scheduled_date:
                 continue
-            
+    
+            all_pickings = self.env['stock.picking']
+            for tp in transit.transit_picking_ids:
+                all_pickings |= tp.src_picking_id | tp.dest_picking_id
+    
+            updatable = all_pickings.filtered(
+                lambda p: p.state not in ('done', 'cancel')
+            )
+            if not updatable:
+                continue
+    
             try:
-                if transit.transit_picking_ids:
-                    pickings = self.env['stock.picking']
-                    for transit_pair in transit.transit_picking_ids:
-                        pickings |= transit_pair.src_picking_id | transit_pair.dest_picking_id
-                    
-                    pickings = pickings.filtered(lambda p: p.state not in ['done', 'cancel'])
-                    
-                    if pickings:
-                        pickings.sudo().action_cancel()
-                
-                transit.state = 'cancel'
-                transit.date_done = fields.Datetime.now()
-                
+                updatable.sudo().write({'scheduled_date': transit.scheduled_date})
+                _logger.info(
+                    "Transit '%s': scheduled_date synced to %d picking(s)",
+                    transit.name, len(updatable),
+                )
             except Exception as e:
-                errors.append(f"'{transit.name}': {str(e)}")
-        
+                # Non-blocking — log and continue so the transit write still succeeds.
+                _logger.warning(
+                    "Transit '%s': failed to sync scheduled_date to pickings: %s",
+                    transit.name, str(e),
+                )
+    
+    def _sync_company_changes_to_pickings(self):
+        if not self:
+            return
+
+        errors = []
+
+        try:
+            _, transit_config_map, _ = self._validate_and_get_companies(self)
+        except UserError as e:
+            raise UserError(f"Company change blocked by validation:\n{e.args[0]}")
+
+        for transit in self:
+            config = transit_config_map.get(transit.id)
+            if not config:
+                errors.append(f"Transit '{transit.name}': no config resolved after re-validation")
+                continue
+
+            src_type      = config['src_config'].src_picking_type_id
+            dest_type     = config['dest_config'].dest_picking_type_id
+            start_company = transit.src_company_id
+            end_company   = transit.dest_company_id
+
+            for tp in transit.transit_picking_ids:
+                src_picking  = tp.src_picking_id.sudo()
+                dest_picking = tp.dest_picking_id.sudo()
+
+                # location_id / location_dest_id will recompute automatically
+                # via _compute_location_id when picking_type_id changes
+                try:
+                    src_picking.write({
+                        'company_id':      start_company.id,
+                        'picking_type_id': src_type.id,
+                        'partner_id':      end_company.partner_id.id,
+                    })
+                    src_picking.move_ids.sudo().write({'company_id': start_company.id})
+                except Exception as e:
+                    errors.append(f"Transit '{transit.name}': src picking update failed: {e}")
+                    continue
+
+                try:
+                    dest_picking.write({
+                        'company_id':      end_company.id,
+                        'picking_type_id': dest_type.id,
+                        'partner_id':      start_company.partner_id.id,
+                    })
+                    dest_picking.move_ids.sudo().write({'company_id': end_company.id})
+                except Exception as e:
+                    errors.append(f"Transit '{transit.name}': dest picking update failed: {e}")
+
+        if errors:
+            raise UserError('Company sync errors:\n• ' + '\n• '.join(errors))
+
+    def action_cancel(self):
+        """
+        Cancel transit orders.
+        """
+        non_cancellable = self.filtered(lambda t: t.state in ('done', 'cancel', 'in_progress'))
+        cancellable     = self - non_cancellable
+
+        errors = [
+            f"'{t.name}': Cannot cancel in state '{t.state}'"
+            for t in non_cancellable
+        ]
+
+        if cancellable:
+            all_pickings = self.env['stock.picking']
+            for transit in cancellable:
+                for tp in transit.transit_picking_ids:
+                    all_pickings |= tp.src_picking_id | tp.dest_picking_id
+            all_pickings = all_pickings.filtered(
+                lambda p: p.state not in ('done', 'cancel')
+            )
+
+            try:
+                if all_pickings:
+                    all_pickings.sudo().action_cancel()
+            except Exception as e:
+                raise UserError(f'Failed to cancel pickings: {str(e)}')
+
+            cancellable.write({
+                'state': 'cancel',
+                'date_done': fields.Datetime.now(),
+            })
+
         if errors:
             raise UserError('Cancel errors:\n• ' + '\n• '.join(errors))
-        
+
         return True
 
     @api.model_create_multi
     def create(self, vals_list):
-        # Set defaults
         for vals in vals_list:
             if 'company_id' not in vals:
                 vals['company_id'] = self.env.company.id
             if 'scheduled_date' not in vals or vals['scheduled_date'] == False:
                 vals['scheduled_date'] = fields.Datetime.now()
         
-        # Group by company
         records_by_company = {}
         for vals in vals_list:
             company_id = vals['company_id']
@@ -883,7 +1033,6 @@ class T4tekTransitOrder(models.Model):
                 records_by_company[company_id] = []
             records_by_company[company_id].append(vals)
         
-        # Pre-collect all unique company IDs
         all_company_ids = set()
         for vals in vals_list:
             if vals.get('src_company_id'):
@@ -891,23 +1040,20 @@ class T4tekTransitOrder(models.Model):
             if vals.get('dest_company_id'):
                 all_company_ids.add(vals['dest_company_id'])
         
-        # Batch browse all companies
         companies = self.env['res.company'].browse(list(all_company_ids))
         company_map = {c.id: c for c in companies}
         
-        # Generate names per company
         for company_id, company_vals_list in records_by_company.items():
             company = self.env['res.company'].browse(company_id)
             parent_name = company.name
             
             for vals in company_vals_list:
-                src_company_id = vals.get('src_company_id')
+                src_company_id = vals.get('src_company_id')	
                 dest_company_id = vals.get('dest_company_id')
                 
                 if not all([company_id, src_company_id, dest_company_id]):
                     continue
                 
-                # Get sequence
                 sequence = self.env['ir.sequence'].with_company(company_id).next_by_code(
                     't4tek.transit.order'
                 )
@@ -916,12 +1062,8 @@ class T4tekTransitOrder(models.Model):
                     continue
                 
                 parts = sequence.split('/')
-                if len(parts) < 3:
-                    continue
-                
                 sequence_number = parts[-1]
                 
-                # Get company names from map
                 src_company = company_map.get(src_company_id)
                 dest_company = company_map.get(dest_company_id)
                 
@@ -931,11 +1073,88 @@ class T4tekTransitOrder(models.Model):
                 start_name = src_company.name.replace(' ', '_')
                 end_name = dest_company.name.replace(' ', '_')
                 
-                # Build full name
                 new_name = f"{parent_name}/TRANSIT/{start_name}.{end_name}/{sequence_number}"
                 vals['name'] = new_name
         
         return super().create(vals_list)
+
+    def write(self, vals):
+        # ── 1. Identify which records will need post-write sync ───────────────
+        company_fields   = {'src_company_id', 'dest_company_id'}
+        company_changed  = bool(company_fields & vals.keys())
+        date_changed     = 'scheduled_date' in vals
+    
+        # We only propagate to pickings for draft/assigned records that already
+        # have picking pairs (draft records have no pickings yet, but guard anyway).
+        syncable_states = ('draft', 'assigned')
+    
+        if company_changed:
+            pre_company_sync = self.filtered(
+                lambda t: t.state in syncable_states and bool(t.transit_picking_ids)
+            )
+        else:
+            pre_company_sync = self.env['t4tek.transit.order']
+    
+        if date_changed:
+            pre_date_sync = self.filtered(
+                lambda t: t.state in syncable_states and bool(t.transit_picking_ids)
+            )
+        else:
+            pre_date_sync = self.env['t4tek.transit.order']
+    
+        # ── 2. Core write (existing logic preserved) ──────────────────────────
+        result = super().write(vals)
+    
+        # ── 3. Rename order reference when companies change (existing) ────────
+        if company_changed:
+            for record in self:
+                if (
+                    record.state not in ('in_progress', 'done')
+                    and record.name
+                    and '/' in record.name
+                ):
+                    parts = record.name.split('/')
+                    if len(parts) >= 4:
+                        sequence_number = parts[-1]
+                        parent_name = record.company_id.name
+                        start_name  = record.src_company_id.name.replace(' ', '_')
+                        end_name    = record.dest_company_id.name.replace(' ', '_')
+                        new_name    = (
+                            f"{parent_name}/TRANSIT/{start_name}.{end_name}/{sequence_number}"
+                        )
+                        if record.name != new_name:
+                            record.with_context(skip_name_check=True).write({'name': new_name})
+    
+        # Guard: cannot rename a terminal order (existing)
+        for record in self:
+            if (
+                'name' in vals
+                and record.state in ('in_progress', 'done')
+                and not self.env.context.get('skip_name_check')
+            ):
+                raise UserError("Cannot change the reference when in progress or done.")
+    
+        # ── 4. Propagate company changes → pickings ───────────────────────────
+        if pre_company_sync:
+            pre_company_sync._sync_company_changes_to_pickings()
+    
+        # ── 5. Propagate date changes → pickings ─────────────────────────────
+        if pre_date_sync:
+            pre_date_sync._sync_scheduled_date_to_pickings()
+    
+        return result
+
+    @api.onchange('src_company_id', 'dest_company_id')
+    def _onchange_companies(self):
+        if self.src_company_id and self.dest_company_id and self.company_id and self.name:
+            if '/' in self.name:
+                parts = self.name.split('/')
+                if len(parts) >= 4:
+                    sequence_number = parts[-1]
+                    parent_name = self.company_id.name
+                    start_name = self.src_company_id.name.replace(' ', '_')
+                    end_name = self.dest_company_id.name.replace(' ', '_')
+                    self.name = f"{parent_name}/TRANSIT/{start_name}.{end_name}/{sequence_number}"
 
     def unlink(self):
         """Override unlink - simplified with cascade delete"""
@@ -958,14 +1177,12 @@ class T4tekTransitOrder(models.Model):
         if not valid_transits:
             raise UserError('Delete errors:\n• ' + '\n• '.join(errors))
         
-        # Collect transit picking pairs and their related stock.pickings BEFORE deleting
         transit_pickings = valid_transits.mapped('transit_picking_ids').filtered(lambda tp: tp.exists())
         stock_pickings = (
             transit_pickings.mapped('src_picking_id') | 
             transit_pickings.mapped('dest_picking_id')
         ).filtered(lambda p: p.exists())
 
-        # Delete transits
         try:
             result = super(T4tekTransitOrder, valid_transits).unlink()
         except Exception as e:
@@ -973,7 +1190,6 @@ class T4tekTransitOrder(models.Model):
             errors.append(f"Failed to delete transits: {str(e)}")
             raise UserError('Delete errors:\n• ' + '\n• '.join(errors))
         
-        # Delete transit picking pairs (mapping records)
         if transit_pickings:
             try:
                 transit_pickings.sudo().unlink()
@@ -981,7 +1197,6 @@ class T4tekTransitOrder(models.Model):
             except Exception as e:
                 _logger.error("Failed to delete transit pickings: %s", str(e), exc_info=True)
 
-        # Delete the actual stock.picking records
         if stock_pickings:
             try:
                 stock_pickings.sudo().unlink()

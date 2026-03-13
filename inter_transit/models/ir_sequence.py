@@ -12,10 +12,6 @@ class IrSequence(models.Model):
         :param operation_type: 'write' or 'unlink'
         :param vals: Dictionary of values being written (for write operations)
         """
-        # Skip check if bypass is enabled
-        if self.env.context.get('bypass_inter_transit_ir_sequence_protection'):
-            return
-        
         # Find all protected transit sequences
         protected_sequence_ids = self.env['ir.sequence'].search(
             [('code', 'in', ['t4tek.transit.order', 't4tek.transit.picking'])]
@@ -42,11 +38,13 @@ class IrSequence(models.Model):
                     )
 
     def write(self, vals):
-        restricted_fields = {'active', 'code', 'company_id', 'name'}
-        if any(field in vals for field in restricted_fields):
-            self._check_protected_ir_sequence('write', vals)
+        if self.env.context.get('skip_t4tek_ir_sequence_write_protection'):
+            restricted_fields = {'active', 'code', 'company_id', 'name'}
+            if any(field in vals for field in restricted_fields):
+                self._check_protected_ir_sequence('write', vals)
         return super().write(vals)
 
     def unlink(self):
-        self._check_protected_ir_sequence('unlink')
+        if self.env.context.get('skip_t4tek_ir_sequence_unlink_protection'):
+            self._check_protected_ir_sequence('unlink')
         return super().unlink()

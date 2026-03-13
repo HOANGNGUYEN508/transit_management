@@ -5,5 +5,6 @@ from . import t4tek_transit_picking_type
 from . import res_company
 from . import product_product
 from . import stock_location
-from . import stock_move
+from . import stock_warehouse
+from . import stock_picking_type
 from . import ir_sequence

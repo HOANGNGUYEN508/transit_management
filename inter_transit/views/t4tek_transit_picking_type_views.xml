@@ -6,7 +6,6 @@
 			<list>
 				<field name="relation_type"/>
 				<field name="warehouse_id"/>
-				<field name="transit_location_id"/>
 				<field name="dest_picking_type_id"/>
 				<field name="src_picking_type_id"/>
 				<field name="company_id"/>
@@ -31,7 +30,6 @@
 						<group>
 							<field name="relation_type" string="Relation Type"/>
 							<field name="warehouse_id"/>
-							<field name="transit_location_id"/>
 						</group>
 					</group>
 					<group>

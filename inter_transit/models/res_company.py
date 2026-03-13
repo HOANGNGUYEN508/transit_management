@@ -1,5 +1,5 @@
 from odoo import api, fields, models # type: ignore
-from odoo.exceptions import UserError # type: ignore
+from odoo.exceptions import ValidationError # type: ignore
 import re
 import logging
 
@@ -8,23 +8,6 @@ _logger = logging.getLogger(__name__)
 
 class ResCompany(models.Model):
     _inherit = 'res.company'
-    
-    def _get_transit_location(self):
-        """Get the transit location for this company through its transit warehouse
-        
-        Structure: Company -> Transit Warehouse -> View Location -> Transit Stock Location
-        
-        Returns:
-            stock.location recordset (empty if not found)
-        """
-        self.ensure_one()
-        transit_wh = self.env['stock.warehouse'].sudo().search([
-            ('company_id', '=', self.id),
-            ('name', '=', f"{self.name}.TRANSIT")
-        ], limit=1)
-        if transit_wh and transit_wh.lot_stock_id and transit_wh.lot_stock_id.usage == 'transit':
-            return transit_wh.lot_stock_id
-        return self.env['stock.location']
                                           
     def _create_transit_warehouse(self):
         """Create the transit warehouse for companies that have children.
@@ -47,15 +30,17 @@ class ResCompany(models.Model):
                 )
                 continue
 
-            # Idempotent: check if transit warehouse already exists
-            existing_wh = Warehouse.search([
+            # Idempotency check via t4tek.transit.picking.type
+            existing_transit_wh = self.env['stock.warehouse'].sudo().search([
+                '&',
                 ('company_id', '=', company.id),
-                ('name', '=', f"{company.name}.TRANSIT")
-            ], limit=1)
-            
-            if existing_wh:
+                ('is_t4tek_transit_warehouse', '=', True),
+            ])
+
+            if existing_transit_wh:
                 _logger.info(
                     f"[res.company] Transit warehouse already exists for company '{company.name}'"
+                    + (f" (warehouse: '{existing_transit_wh.name}', id={existing_transit_wh.id})" if existing_transit_wh else "")
                 )
                 continue
 
@@ -81,28 +66,35 @@ class ResCompany(models.Model):
 
             # Step 3: Create warehouse with context to skip auto-creation of picking types
             transit_wh = Warehouse.with_context(
-                skip_transit_picking_type_creation=True
+                skip_create_warehouse_transit_picking_types=True,
+                skip_t4tek_stock_picking_type_write_protection=True,
             ).create({
                 'name': f"{company.name}.TRANSIT",
                 'code': unique_code,
                 'company_id': company.id,
                 'reception_steps': 'one_step',
                 'delivery_steps': 'ship_only',
+                'is_t4tek_transit_warehouse': True,
             })
 
             temp_transit_location = transit_wh.lot_stock_id
             temp_transit_view_location = transit_wh.view_location_id
             
-            # Note: we need to write separately to set the locations due to odoo logic that creates their own view/stock locations on warehouse creation.
+            # FIX (Bug 1): Pass bypass context so the write() guard on StockWarehouse
+            # doesn't block us from swapping the auto-created locations with our own.
+            # Note: we need to write separately to set the locations due to odoo logic
+            # that creates their own view/stock locations on warehouse creation.
             transit_wh.with_context(
-                skip_transit_picking_type_creation=True
+                skip_create_warehouse_transit_picking_types=True,
+                skip_t4tek_stock_warehouse_write_protection=True,
             ).sudo().write({
                 'view_location_id': view_location.id,
                 'lot_stock_id': transit_location.id,
             })
 
-            temp_transit_location.sudo().write({'active': False})
-            temp_transit_view_location.sudo().write({'active': False})
+            bypass_ctx = {'skip_t4tek_stock_location_write_protection': True}
+            temp_transit_location.sudo().with_context(**bypass_ctx).write({'active': False})
+            temp_transit_view_location.sudo().with_context(**bypass_ctx).write({'active': False})
 
             # Step 4: Create transit order sequence
             sequence_code = 't4tek.transit.order'
@@ -139,87 +131,97 @@ class ResCompany(models.Model):
             )
             
     def _archive_transit_warehouse_defaults(self):
-        """Archive the default sequences and picking types auto-created by Odoo on transit warehouse creation.
-        
-        When Odoo creates a warehouse, it auto-generates sequences and picking types we don't need.
-        Strategy: find ir.sequence records named like '{company}.TRANSIT' then archive them
-        and any stock.picking.type that references those sequences.
-        """
-        Sequence = self.env['ir.sequence'].sudo()
+        """Archive the default sequences and picking types auto-created by Odoo on transit warehouse creation."""
         PickingType = self.env['stock.picking.type'].sudo()
+        Sequence = self.env['ir.sequence'].sudo()
 
         for company in self:
-            transit_wh_name = f"{company.name}.TRANSIT"
-
-            # Find all auto-created sequences for this transit warehouse
-            sequences = Sequence.search([
-                ('name', 'like', transit_wh_name),
+            transit_wh = self.env['stock.warehouse'].sudo().search([
+                '&',
                 ('company_id', '=', company.id),
-                ('active', '=', True),
+                ('is_t4tek_transit_warehouse', '=', True),
             ])
 
-            if not sequences:
+            if not transit_wh:
                 _logger.info(
-                    f"[res.company] No default sequences found to archive for transit warehouse of company '{company.name}'"
+                    f"[res.company] No transit warehouse found for company '{company.name}', skipping archive."
                 )
                 continue
 
-            # Find picking types that use any of these sequences
             picking_types = PickingType.search([
-                ('sequence_id', 'in', sequences.ids),
+                ('warehouse_id', '=', transit_wh.id),
                 ('active', '=', True),
             ])
 
-            if picking_types:
-                picking_types.write({'active': False})
+            if not picking_types:
                 _logger.info(
-                    f"[res.company] Archived {len(picking_types)} default picking type(s) for transit warehouse of company '{company.name}': {picking_types.mapped('name')}"
+                    f"[res.company] No default picking types found to archive for transit warehouse of company '{company.name}'"
                 )
+                continue
 
-            sequences.write({'active': False})
+            sequence_ids = picking_types.mapped('sequence_id.id')
+
+            picking_types.with_context(skip_t4tek_stock_picking_type_write_protection=True).write({'active': False})
             _logger.info(
-                f"[res.company] Archived {len(sequences)} default sequence(s) for transit warehouse of company '{company.name}': {sequences.mapped('name')}"
+                f"[res.company] Archived {len(picking_types)} default picking type(s) for transit warehouse "
+                f"of company '{company.name}': {picking_types.mapped('name')}"
             )
+
+            if sequence_ids:
+                sequences = Sequence.search([
+                    ('id', 'in', sequence_ids),
+                    ('active', '=', True),
+                ])
+                if sequences:
+                    sequences.write({'active': False})
+                    _logger.info(
+                        f"[res.company] Archived {len(sequences)} default sequence(s) for transit warehouse "
+                        f"of company '{company.name}': {sequences.mapped('name')}"
+                    )
     
     def _create_warehouse_transit_picking_types(self, warehouse=None):
-        """Create warehouse-level transit picking types based on parent/child relation_typeships.
+        """Create warehouse-level transit picking types based on parent/child relationships.
         
         For each warehouse belonging to a company:
         - If company has parent: warehouse gets 2 operation types for parent's transit (OUT and IN)
         - If company has children: warehouse gets 2 operation types for own transit (OUT and IN)
         
-        These are created at WAREHOUSE level (warehouse_id populated) and mapped by warehouse + transit location.
+        These are created at WAREHOUSE level (warehouse_id populated) and mapped by warehouse + relation type.
         
         Args:
             warehouse: Optional specific warehouse to create types for. If None, processes all company warehouses.
         """
         # ======================================================================================
-        if self.env.context.get('skip_transit_picking_type_creation'):
+        if self.env.context.get('skip_create_warehouse_transit_picking_types'):
             return
         # ======================================================================================
 
-        PickingType = self.env['stock.picking.type'].sudo()
+        # FIX (Bug 2): Build a sudo env with all company IDs allowed so Odoo's cross-company
+        # ORM check does not reject picking types whose src/dest locations have company_id=False
+        # but are "owned" by a different company in the current environment context.
+        all_company_ids = self.env['res.company'].sudo().search([]).ids
+        PickingType = self.env['stock.picking.type'].sudo().with_context(
+            allowed_company_ids=all_company_ids
+        )
         Sequence = self.env['ir.sequence'].sudo()
         TransitPickingType = self.env['t4tek.transit.picking.type'].sudo()
         Warehouse = self.env['stock.warehouse'].sudo()
         
         for company in self:
-            # Check if company has parent or children (is part of inter-company structure)
             is_parent = bool(company.child_ids)
             is_child = bool(company.parent_id)
             
             if not (is_parent or is_child):
-                # Company is standalone, no transit operations needed
                 continue
             
-            # Get warehouses to process (exclude transit warehouses)
+            # Transit warehouses have lot_stock_id.usage = 'transit', so the existing
+            # ('lot_stock_id.usage', '=', 'internal') filter already excludes them.
             if warehouse:
                 warehouses = warehouse if warehouse.company_id == company else Warehouse.browse()
             else:
                 warehouses = Warehouse.search([
                     ('company_id', '=', company.id),
-                    ('name', 'not like', '.TRANSIT'),
-                    ('lot_stock_id.usage', '=', 'internal')
+                    ('lot_stock_id.usage', '=', 'internal'),
                 ])
             
             if not warehouses:
@@ -228,7 +230,6 @@ class ResCompany(models.Model):
                 )
                 continue
             
-            # Process each warehouse
             for wh in warehouses:
                 if not wh.lot_stock_id or wh.lot_stock_id.usage != 'internal':
                     _logger.warning(
@@ -237,44 +238,43 @@ class ResCompany(models.Model):
                     continue
                 
                 warehouse_stock_location = wh.lot_stock_id
-                
-                # Use company name and warehouse code for prefixes
                 warehouse_code = wh.code if wh.code else wh.name.replace(' ', '_')
-                
-                # Track which operation types to create
                 operations_to_create = []
                 
                 # ============================================
                 # Part 1: Operations to PARENT's transit location (if company has parent)
                 # ============================================
                 if is_child and company.parent_id:
-                    parent_transit = company.parent_id._get_transit_location()
+                    parent_transit_wh = self.env['stock.warehouse'].sudo().search([
+                        '&',
+                        ('company_id', '=', company.parent_id.id),
+                        ('is_t4tek_transit_warehouse', '=', True)
+                    ])
+                    parent_transit = parent_transit_wh.lot_stock_id if parent_transit_wh else self.env['stock.location']
                     
                     if parent_transit:
                         operations_to_create.extend([
                             {
                                 'type': 'parent_in',
                                 'relation_type': 'child_to_parent',
-                                'transit_location': parent_transit,
+                                'src_location': parent_transit,
+                                'dest_location': warehouse_stock_location,
                                 'name': f'Transit Receipts - {company.parent_id.name}',
                                 'code': 'incoming',
                                 'sequence_code': 'TRANSIT/IN',
                                 'prefix': f'{warehouse_code}/TRANSIT/IN/',
-                                'src_location': parent_transit,
-                                'dest_location': warehouse_stock_location,
                                 'use_create_lots': True,
                                 'use_existing_lots': False,
                             },
                             {
                                 'type': 'parent_out',
                                 'relation_type': 'child_to_parent',
-                                'transit_location': parent_transit,
+                                'src_location': warehouse_stock_location,
+                                'dest_location': parent_transit,
                                 'name': f'Transit Deliveries - {company.parent_id.name}',
                                 'code': 'outgoing',
                                 'sequence_code': 'TRANSIT/OUT',
                                 'prefix': f'{warehouse_code}/TRANSIT/OUT/',
-                                'src_location': warehouse_stock_location,
-                                'dest_location': parent_transit,
                                 'use_create_lots': False,
                                 'use_existing_lots': True,
                                 'reservation_method': 'at_confirm',
@@ -285,33 +285,36 @@ class ResCompany(models.Model):
                 # Part 2: Operations to OWN transit location (if company has children)
                 # ============================================
                 if is_parent:
-                    own_transit = company._get_transit_location()
-                    
+                    own_transit_wh = self.env['stock.warehouse'].sudo().search([
+                        '&',
+                        ('company_id', '=', company.id),
+                        ('is_t4tek_transit_warehouse', '=', True)
+                    ], limit=1)
+                    own_transit = own_transit_wh.lot_stock_id if own_transit_wh else self.env['stock.location']
+
                     if own_transit:
                         operations_to_create.extend([
                             {
                                 'type': 'child_in',
                                 'relation_type': 'parent_to_child',
-                                'transit_location': own_transit,
+                                'src_location': own_transit,
+                                'dest_location': warehouse_stock_location,
                                 'name': f'Transit Receipts - {company.name}',
                                 'code': 'incoming',
                                 'sequence_code': 'TRANSIT/IN',
                                 'prefix': f'{warehouse_code}/TRANSIT/IN/',
-                                'src_location': own_transit,
-                                'dest_location': warehouse_stock_location,
                                 'use_create_lots': True,
                                 'use_existing_lots': False,
                             },
                             {
                                 'type': 'child_out',
                                 'relation_type': 'parent_to_child',
-                                'transit_location': own_transit,
+                                'src_location': warehouse_stock_location,
+                                'dest_location': own_transit,
                                 'name': f'Transit Deliveries - {company.name}',
                                 'code': 'outgoing',
                                 'sequence_code': 'TRANSIT/OUT',
                                 'prefix': f'{warehouse_code}/TRANSIT/OUT/',
-                                'src_location': warehouse_stock_location,
-                                'dest_location': own_transit,
                                 'use_create_lots': False,
                                 'use_existing_lots': True,
                                 'reservation_method': 'at_confirm',
@@ -330,8 +333,6 @@ class ResCompany(models.Model):
                 picking_types_created = []
                 
                 for op_config in operations_to_create:
-                    # Check if this specific operation type already exists
-                    # Identified by: warehouse + src location + dest location
                     existing = PickingType.search([
                         ('warehouse_id', '=', wh.id),
                         ('company_id', '=', company.id),
@@ -346,12 +347,10 @@ class ResCompany(models.Model):
                         picking_types_created.append({
                             'type': op_config['type'],
                             'relation_type': op_config['relation_type'],
-                            'transit_location': op_config['transit_location'],
-                            'picking_type': existing
+                            'picking_type': existing,
                         })
                         continue
                     
-                    # Get or create sequence
                     sequence = Sequence.search([
                         ('code', '=', 't4tek.transit.picking'),
                         ('company_id', '=', company.id),
@@ -374,13 +373,12 @@ class ResCompany(models.Model):
                             f"[res.company] Created sequence with prefix '{op_config['prefix']}' for warehouse '{wh.name}'"
                         )
                     
-                    # Create picking type (WAREHOUSE-LEVEL)
                     picking_data = {
                         'name': op_config['name'],
                         'code': op_config['code'],
                         'sequence_id': sequence.id,
                         'sequence_code': op_config['sequence_code'],
-                        'warehouse_id': wh.id,  # Warehouse-level operation type
+                        'warehouse_id': wh.id,
                         'company_id': company.id,
                         'default_location_src_id': op_config['src_location'].id,
                         'default_location_dest_id': op_config['dest_location'].id,
@@ -396,8 +394,7 @@ class ResCompany(models.Model):
                     picking_types_created.append({
                         'type': op_config['type'],
                         'relation_type': op_config['relation_type'],
-                        'transit_location': op_config['transit_location'], 
-                        'picking_type': picking_type
+                        'picking_type': picking_type,
                     })
                     
                     _logger.info(
@@ -408,18 +405,17 @@ class ResCompany(models.Model):
                     continue
                 
                 # ============================================
-                # Part 4: Create t4tek.transit.picking.type records (grouped by relation_type + transit location)
+                # Part 4: Create t4tek.transit.picking.type records (grouped by relation_type)
+                # FIX (Bug 3): Removed transit_location_id — group and search by relation_type
+                # only, which matches the unique SQL constraint on the model.
                 # ============================================
-                # Group by relation_type type and transit location
                 from collections import defaultdict
                 groups = defaultdict(list)
                 
                 for item in picking_types_created:
-                    key = (item['relation_type'], item['transit_location'].id)
-                    groups[key].append(item)
+                    groups[item['relation_type']].append(item)
                 
-                # Create transit picking type records for each group
-                for (relation_type, transit_loc_id), items in groups.items():
+                for relation_type, items in groups.items():
                     in_type = next((i['picking_type'] for i in items if i['type'] in ['parent_in', 'child_in']), None)
                     out_type = next((i['picking_type'] for i in items if i['type'] in ['parent_out', 'child_out']), None)
                     
@@ -429,13 +425,10 @@ class ResCompany(models.Model):
                         )
                         continue
                     
-                    # Check if record already exists
                     existing = TransitPickingType.search([
                         ('warehouse_id', '=', wh.id),
                         ('company_id', '=', company.id),
-                        ('transit_location_id', '=', transit_loc_id),
-                        ('dest_picking_type_id', '=', in_type.id),
-                        ('src_picking_type_id', '=', out_type.id)
+                        ('relation_type', '=', relation_type),
                     ], limit=1)
                     
                     if not existing:
@@ -443,7 +436,6 @@ class ResCompany(models.Model):
                             'warehouse_id': wh.id,
                             'company_id': company.id,
                             'relation_type': relation_type,
-                            'transit_location_id': transit_loc_id,
                             'dest_picking_type_id': in_type.id,
                             'src_picking_type_id': out_type.id,
                         })
@@ -462,35 +454,29 @@ class ResCompany(models.Model):
 
         for company in self:
             try:
-                # Get transit warehouse
+                
                 transit_wh = self.env['stock.warehouse'].sudo().search([
+                    '&',
                     ('company_id', '=', company.id),
-                    ('name', 'like', '.TRANSIT')
-                ], limit=1)
+                    ('is_t4tek_transit_warehouse', '=', True)
+                ])
 
                 if not transit_wh:
                     continue
 
-                # Already up to date
-                if transit_wh.name.rsplit('.TRANSIT', 1)[0] == company.name:
-                    continue
-
-                # Update warehouse name
                 new_wh_name = f"{company.name}.TRANSIT"
                 if transit_wh.name != new_wh_name:
-                    transit_wh.sudo().write({'name': new_wh_name})
+                    transit_wh.sudo().with_context(skip_t4tek_stock_warehouse_write_protection=True).write({'name': new_wh_name})
 
-                # Update view location name
                 if transit_wh.view_location_id:
                     new_view_name = f"{company.name}.TRANSIT"
                     if transit_wh.view_location_id.name != new_view_name:
                         transit_wh.view_location_id.with_context(
-                            bypass_inter_transit_location_protection=True
+                            skip_t4tek_stock_location_write_protection=True
                         ).sudo().write({'name': new_view_name})
 
                 # Transit stock location name stays 'Stock' — complete_name updates automatically
 
-                # Update transit order sequence prefix
                 company_code = company.name.replace(' ', '_')
                 new_order_prefix = f"{company_code}/TRANSIT/"
 
@@ -501,18 +487,18 @@ class ResCompany(models.Model):
 
                 if order_seq and order_seq.prefix != new_order_prefix:
                     order_seq.with_context(
-                        bypass_inter_transit_ir_sequence_protection=True
+                        skip_t4tek_ir_sequence_write_protection=True
                     ).sudo().write({'prefix': new_order_prefix})
 
-                # Update IN/OUT sequence prefixes for each normal warehouse
+                # Transit warehouses have lot_stock_id.usage='transit';
+                # normal warehouses have 'internal'.
                 warehouses = self.env['stock.warehouse'].sudo().search([
                     ('company_id', '=', company.id),
-                    ('name', 'not like', '.TRANSIT')
+                    ('lot_stock_id.usage', '=', 'internal'),
                 ])
 
                 for warehouse in warehouses:
                     warehouse_code = warehouse.code or warehouse.name.replace(' ', '_')
-
                     self._update_transit_sequences_for_warehouse(
                         company, warehouse, warehouse_code
                     )
@@ -529,34 +515,48 @@ class ResCompany(models.Model):
                 errors.append(f"Company '{company.name}': {str(e)}")
 
         if errors:
-            raise UserError(
+            raise ValidationError(
                 "Failed to update transit warehouse/sequences:\n• " + "\n• ".join(errors)
             )
 
     def _update_transit_sequences_for_warehouse(self, company, warehouse, warehouse_code):
         """
         Helper: update IN and OUT transit sequence prefixes for a single warehouse.
-        Extracted to keep automation_handle_company_name_change readable.
+
+        Uses t4tek.transit.picking.type as the source of truth to find the exact
+        picking types (and their sequences) for this warehouse — no fragile prefix
+        pattern matching required.
         """
-        IrSequence = self.env['ir.sequence'].sudo()
-        PickingType = self.env['stock.picking.type'].sudo()
-        ctx = {'bypass_inter_transit_ir_sequence_protection': True}
+        TransitPickingType = self.env['t4tek.transit.picking.type'].sudo()
+        ctx = {'skip_t4tek_ir_sequence_write_protection': True}
 
-        for picking_code, direction in [('incoming', 'IN'), ('outgoing', 'OUT')]:
-            new_prefix = f"{warehouse_code}/TRANSIT/{direction}/"
+        transit_configs = TransitPickingType.search([
+            ('warehouse_id', '=', warehouse.id),
+            ('company_id', '=', company.id),
+        ])
 
-            sequences = IrSequence.search([
-                ('code', '=', 't4tek.transit.picking'),
-                ('company_id', '=', company.id),
-                ('prefix', 'like', f'%/TRANSIT/{direction}/'),
-            ])
+        if not transit_configs:
+            _logger.debug(
+                f"[res.company] No transit configs found for warehouse '{warehouse.name}' "
+                f"(id={warehouse.id}), skipping sequence update."
+            )
+            return
 
-            for seq in sequences:
-                linked_type = PickingType.search([
-                    ('sequence_id', '=', seq.id),
-                    ('warehouse_id', '=', warehouse.id),
-                    ('code', '=', picking_code),
-                ], limit=1)
+        for config in transit_configs:
+            out_seq = config.src_picking_type_id.sequence_id
+            new_out_prefix = f"{warehouse_code}/TRANSIT/OUT/"
+            if out_seq and out_seq.prefix != new_out_prefix:
+                out_seq.with_context(**ctx).write({'prefix': new_out_prefix})
+                _logger.info(
+                    f"[res.company] Updated OUT sequence prefix to '{new_out_prefix}' "
+                    f"for warehouse '{warehouse.name}' (relation: {config.relation_type})"
+                )
 
-                if linked_type and seq.prefix != new_prefix:
-                    seq.with_context(**ctx).write({'prefix': new_prefix})
+            in_seq = config.dest_picking_type_id.sequence_id
+            new_in_prefix = f"{warehouse_code}/TRANSIT/IN/"
+            if in_seq and in_seq.prefix != new_in_prefix:
+                in_seq.with_context(**ctx).write({'prefix': new_in_prefix})
+                _logger.info(
+                    f"[res.company] Updated IN sequence prefix to '{new_in_prefix}' "
+                    f"for warehouse '{warehouse.name}' (relation: {config.relation_type})"
+                )

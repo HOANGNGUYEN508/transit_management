@@ -1,0 +1,391 @@
+// =============================================================================
+// T4tek Transit Picking — Component Styles
+// =============================================================================
+
+// ── Design tokens ─────────────────────────────────────────────────────────────
+
+$transit-border-color: #dee2e6;
+$transit-border-strong: #adb5bd;
+$transit-header-bg: #f8f9fa;
+$transit-font-size-base: 13px;
+$transit-font-size-sm: 12px;
+$transit-font-size-xs: 11px;
+$transit-row-height: 38px;
+
+$transit-color-source: #017e84;
+$transit-color-dest: #5c6bc0;
+$transit-color-muted: #8f8f8f;
+
+// ── Semantic severity tokens ───────────────────────────────────────────────────
+// 🟡 Yellow  → product presence issues  (missing, src_only, dest_only)
+// 🟠 Orange  → quantity issues          (qty_mismatch)
+// 🔴 Red     → lot / SN issues          (lot_mismatch)
+
+$color-qty-issue: #fd7e14; // Bootstrap $orange
+
+// =============================================================================
+// ORANGE TIER — quantity mismatch
+// =============================================================================
+
+.badge-qty-issue {
+	background-color: $color-qty-issue;
+	color: #fff;
+}
+
+// Mirrors Bootstrap's .table-warning / .table-danger pattern
+.table-orange {
+	--bs-table-bg: rgba(253, 126, 20, 0.15);
+	--bs-table-striped-bg: rgba(253, 126, 20, 0.2);
+	--bs-table-hover-bg: rgba(253, 126, 20, 0.2);
+	--bs-table-border-color: rgba(253, 126, 20, 0.35);
+	color: #5c2e00;
+}
+
+.text-orange {
+	color: $color-qty-issue !important;
+}
+
+// =============================================================================
+// TRANSIT PICKING DETAIL
+// =============================================================================
+
+.t4tek-transit-picking-detail {
+	// ── Separator utilities ───────────────────────────────────────────────────
+
+	.col-sep-right {
+		border-right: 2px solid $transit-border-strong !important;
+	}
+	.text-source {
+		color: $transit-color-source;
+	}
+	.text-dest {
+		color: $transit-color-dest;
+	}
+
+	// ── Comparison table ──────────────────────────────────────────────────────
+
+	.transit-comparison-table {
+		font-size: $transit-font-size-base;
+		border-collapse: collapse;
+		width: 100%;
+		table-layout: fixed;
+		border: 1px solid $transit-border-color;
+		border-radius: 4px;
+		overflow: hidden;
+
+		col.col-expected {
+			width: 110px;
+		}
+		col.col-src-qty {
+			width: 110px;
+		}
+		col.col-dest-qty {
+			width: 120px;
+		}
+		col.col-detail {
+			width: 44px;
+		}
+		col.col-status {
+			width: 130px;
+		}
+
+		thead tr.transit-col-header {
+			background: $transit-header-bg;
+
+			th {
+				font-weight: 600;
+				font-size: $transit-font-size-sm;
+				color: #495057;
+				padding: 8px 10px;
+				border-bottom: 2px solid $transit-border-strong;
+				white-space: nowrap;
+				vertical-align: middle;
+
+				&[title="Lot / Serial detail"] {
+					padding: 0;
+					i {
+						font-size: $transit-font-size-xs;
+					}
+				}
+			}
+		}
+
+		tbody tr {
+			height: $transit-row-height;
+			border-bottom: 1px solid $transit-border-color;
+
+			&:last-child {
+				border-bottom: none;
+			}
+
+			&:not(.table-danger):not(.table-warning):not(.table-success):not(.table-orange):hover {
+				background-color: #f5f5f5;
+			}
+
+			td {
+				padding: 6px 10px;
+				vertical-align: middle;
+				overflow: hidden;
+			}
+
+			td.transit-product-name {
+				font-weight: 600;
+				font-size: $transit-font-size-base;
+				color: #212529;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			td.transit-qty {
+				font-size: $transit-font-size-base;
+				font-variant-numeric: tabular-nums;
+			}
+			td.transit-qty-expected {
+				font-size: $transit-font-size-sm;
+				color: $transit-color-muted;
+				font-variant-numeric: tabular-nums;
+			}
+
+			td.transit-status {
+				white-space: nowrap;
+				text-align: center;
+
+				.badge {
+					font-size: $transit-font-size-sm;
+					font-weight: 500;
+					padding: 4px 6px;
+					border-radius: 6px;
+					display: inline-block;
+					margin: 1px 2px;
+					line-height: 1;
+					cursor: default;
+				}
+			}
+
+			td.transit-detail-btn {
+				padding: 0;
+				text-align: center;
+				vertical-align: middle;
+
+				.btn-detail {
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					width: 26px;
+					height: 26px;
+					padding: 0;
+					font-size: $transit-font-size-xs;
+					border-radius: 4px;
+					color: $transit-color-muted;
+					border-color: $transit-border-color;
+
+					&:hover {
+						color: #212529;
+						background: #e9ecef;
+						border-color: $transit-border-strong;
+					}
+				}
+
+				.btn-detail-placeholder {
+					display: inline-block;
+					width: 26px;
+					height: 26px;
+				}
+			}
+		}
+	}
+
+	// ── Mismatch summary ──────────────────────────────────────────────────────
+
+	.transit-mismatch-summary {
+		font-size: $transit-font-size-base;
+		border-radius: 4px;
+		margin-top: 8px;
+		margin-bottom: 0;
+		padding: 8px 14px;
+
+		.mismatch-summary-title {
+			font-weight: 600;
+			font-size: $transit-font-size-sm;
+			margin-bottom: 6px;
+		}
+
+		.mismatch-summary-list {
+			margin-bottom: 0;
+			padding-left: 16px;
+
+			.mismatch-summary-product {
+				margin-bottom: 4px;
+
+				.mismatch-detail-list {
+					margin-top: 4px;
+					margin-bottom: 0;
+					padding-left: 0;
+					list-style: none;
+
+					li {
+						font-size: $transit-font-size-sm;
+						line-height: 1.6;
+						color: #5c1a1a;
+						padding: 1px 6px;
+						border-left: 3px solid rgba(0, 0, 0, 0.2);
+						margin-left: 2px;
+						margin-top: 2px;
+
+						&.text-danger {
+							color: #5c1a1a !important;
+						}
+						&.text-warning {
+							color: #5c3a00 !important;
+						}
+						&.text-orange {
+							color: #5c2e00 !important;
+						}
+
+						i {
+							opacity: 0.7;
+						}
+
+						.detail-lot-name {
+							font-weight: 600;
+						}
+
+						.detail-qty-highlight {
+							display: inline-block;
+							background: rgba(0, 0, 0, 0.12);
+							color: inherit;
+							font-weight: 700;
+							font-size: $transit-font-size-xs;
+							padding: 0px 5px;
+							border-radius: 3px;
+							font-variant-numeric: tabular-nums;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// =============================================================================
+// TRANSIT LOT DIALOG
+// =============================================================================
+
+.t4tek-transit-lot-dialog {
+	// ── Separator / colour utilities (scoped to dialog) ───────────────────────
+	.col-sep-right {
+		border-right: 2px solid $transit-border-strong !important;
+	}
+	.text-source {
+		color: $transit-color-source;
+	}
+	.text-dest {
+		color: $transit-color-dest;
+	}
+
+	.lot-table-wrapper {
+		border: 1px solid $transit-border-color;
+		border-radius: 4px;
+		overflow: hidden;
+	}
+
+	.lot-mismatch-alert {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
+		font-size: $transit-font-size-base;
+	}
+
+	.lot-empty-state {
+		text-align: center;
+		color: $transit-color-muted;
+		padding: 24px 0;
+		font-size: $transit-font-size-base;
+
+		i {
+			font-size: 24px;
+			margin-bottom: 8px;
+			display: block;
+			opacity: 0.4;
+		}
+	}
+
+	// ── Simplified two-column lot table ───────────────────────────────────────
+
+	.lot-comparison-table {
+		font-size: $transit-font-size-base;
+		border: 1px solid $transit-border-color;
+		border-radius: 4px;
+		overflow: hidden;
+		border-collapse: collapse;
+		width: 100%;
+		table-layout: fixed;
+
+		col.col-index {
+			width: 36px;
+		}
+
+		thead tr {
+			background: $transit-header-bg;
+
+			th {
+				font-weight: 600;
+				font-size: $transit-font-size-sm;
+				color: #495057;
+				padding: 8px 10px;
+				border-bottom: 2px solid $transit-border-strong;
+				white-space: nowrap;
+				vertical-align: middle;
+
+				&.col-index {
+					text-align: center;
+				}
+			}
+		}
+
+		tbody tr {
+			border-bottom: 1px solid $transit-border-color;
+
+			&:last-child {
+				border-bottom: none;
+			}
+			&:hover:not(.table-warning):not(.table-danger) {
+				background: #f8f9fa;
+			}
+		}
+
+		td {
+			padding: 7px 10px;
+			vertical-align: middle;
+			font-size: $transit-font-size-base;
+			overflow: hidden;
+		}
+
+		td.lot-row-index {
+			text-align: center;
+			color: $transit-color-muted;
+			font-size: $transit-font-size-xs;
+			border-right: 1px solid $transit-border-color;
+		}
+
+		td.lot-name-cell {
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+
+			i.fa-tag {
+				font-size: $transit-font-size-xs;
+				margin-right: 5px;
+			}
+
+			.lot-qty-inline {
+				font-size: $transit-font-size-sm;
+				color: $transit-color-muted;
+				margin-left: 5px;
+				font-variant-numeric: tabular-nums;
+			}
+		}
+	}
+}

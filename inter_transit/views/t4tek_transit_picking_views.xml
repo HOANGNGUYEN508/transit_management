@@ -1,13 +1,25 @@
 <odoo>
+	<!-- ─────────────────────────────────────────────────────────────────────
+	  Color-theme legend (picking level)
+	  ─────────────────────────────────────────────────────────────────────
+	  decoration-muted   → transit order cancelled
+	  decoration-danger  → very late  |  mismatch (lot/SN or qty)
+	  decoration-warning → late but not very late, no mismatch
+	  decoration-info    → scheduled today, not late
+	  decoration-primary → src done, dest still pending, on track
+	  decoration-success → BOTH src and dest done, no mismatch
+	                        (uses src/dest picking states, not order state,
+	                         so each backorder pair is coloured independently)
+	  ───────────────────────────────────────────────────────────────────── -->
+
 	<record id="view_t4tek_transit_picking_tree" model="ir.ui.view">
 		<field name="name">t4tek.transit.picking.tree</field>
 		<field name="model">t4tek.transit.picking</field>
 		<field name="arch" type="xml">
-			<list delete="0" create="0" decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch">
+			<list delete="0" create="0" decoration-muted="state == 'cancel'" decoration-danger="is_very_late or has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-primary="src_picking_state == 'done' and dest_picking_state != 'done' and not is_late and not has_mismatch" decoration-success="src_picking_state == 'done' and dest_picking_state == 'done' and not has_mismatch">
 				<field name="company_id" optional="hide"/>
-
 				<field name="t4tek_transit_order_id"/>
-				<field name="state" optional="hide" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'" />
+				<field name="state" optional="hide" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"/>
 				<field name="scheduled_date" widget="datetime"/>
 				<field name="transit_date_done" widget="datetime"/>
 
@@ -18,6 +30,14 @@
 				<field name="dest_picking_id"/>
 				<field name="dest_picking_state" widget="badge" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
 				<field name="dest_date_done" widget="datetime" optional="hide"/>
+
+				<!-- Hidden fields used for decorations -->
+				<field name="has_mismatch" column_invisible="1"/>
+				<field name="is_late" column_invisible="1"/>
+				<field name="is_today" column_invisible="1"/>
+				<field name="is_very_late" column_invisible="1"/>
+				<field name="src_picking_state" column_invisible="1"/>
+				<field name="dest_picking_state" column_invisible="1"/>
 			</list>
 		</field>
 	</record>
@@ -33,17 +53,14 @@
 				</header>
 
 				<sheet>
-
-					<!-- Mismatch ribbon -->
 					<widget name="web_ribbon" text="Mismatch Detected" bg_color="text-bg-danger" invisible="not has_mismatch"/>
 
 					<div class="oe_title">
 						<h1>
-							<field name="t4tek_transit_order_id" readonly="1" decoration-muted="state == 'cancel'" decoration-success="state == 'done' and not has_mismatch" decoration-primary="state == 'in_progress' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch"/>
+							<field name="t4tek_transit_order_id" readonly="1" decoration-muted="state == 'cancel'" decoration-success="src_picking_state == 'done' and dest_picking_state == 'done' and not has_mismatch" decoration-primary="src_picking_state == 'done' and dest_picking_state != 'done' and not is_late and not has_mismatch" decoration-info="is_today and not is_late" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-danger="is_very_late or has_mismatch"/>
 						</h1>
 					</div>
 
-					<!-- Header meta info -->
 					<group>
 						<group>
 							<field name="src_company_id" readonly="1"/>
@@ -58,35 +75,36 @@
 						</group>
 					</group>
 
+					<!-- Hidden fields used for decorations -->
+					<field name="has_mismatch" invisible="1"/>
+					<field name="is_late" invisible="1"/>
+					<field name="is_today" invisible="1"/>
+					<field name="is_very_late" invisible="1"/>
+					<field name="src_picking_state" invisible="1"/>
+					<field name="dest_picking_state" invisible="1"/>
+
 					<!-- ── Move comparison section ── -->
 					<div class="mt-3">
-
 						<!-- Picking pair info bar -->
 						<div class="d-flex align-items-center px-3 py-2 mb-3 rounded" style="background:#f8f9fa; border:1px solid #dee2e6;">
-
 							<div class="d-flex align-items-center gap-2">
 								<i class="fa fa-sign-out text-muted" title="Source Delivery"/>
 								<span class="fw-bold text-muted small text-uppercase">Source Delivery</span>
 								<field name="src_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold ms-1"/>
 								<field name="src_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
 							</div>
-
 							<i class="fa fa-long-arrow-right fa-lg text-muted mx-3"/>
-
 							<div class="d-flex align-items-center gap-2">
 								<i class="fa fa-sign-in text-muted" title="Destination Receipt"/>
 								<span class="fw-bold text-muted small text-uppercase">Destination Receipt</span>
 								<field name="dest_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold ms-1"/>
 								<field name="dest_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
 							</div>
-
 						</div>
 
 						<!-- Unified comparison table -->
-						<field name="comparison_html" readonly="1" nolabel="1" sanitize="0"/>
-
+						<field name="comparison_data" widget="t4tek_transit_picking_detail"/>
 					</div>
-
 				</sheet>
 			</form>
 		</field>
