@@ -166,7 +166,7 @@ Each protection can be bypassed via a specific context key (e.g. `skip_stock_war
                      ┌──────┴──────┐                                                |                                             │
                      │    cancel   │                                                └─────────────────────────────────────────────┘
                      └─────────────┘                                                                   [action_stop]
-
+```
 **TRANSIT PICKING** (transit.picking): 
 - state mirror transit order, considered done when both sides are done, considered cancelled when both sides are cancelled.
 - can execute action_cancel/action_stop independently from the transit order, dictated by the state of transit order 
@@ -174,6 +174,7 @@ and the scope is for the transit picking itself (not the entire transit).
                      
 **STOCK PICKING** (stock.picking):
 - outgoing (src side):
+```
        ┌─────────────────────────────────────────────────────────────────────────────────────┐
        |                                                                                     |
        |                    whole              [delegate]            partial                 |
@@ -204,7 +205,7 @@ and the scope is for the transit picking itself (not the entire transit).
                        ┌──────┴──────┐
                        │    cancel   │
                        └─────────────┘
-
+```
 **Note**:
 - action_confirm: Mark as todo
 - action_cancel: Cancel
