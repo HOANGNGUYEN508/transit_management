@@ -155,8 +155,8 @@ Each protection can be bypassed via a specific context key (e.g. `skip_stock_war
 
 ## Work Flow
 
-```
 **TRANSIT ORDER** (transit.order):
+```
     ┌─────────────┐  [action_confirm]  ┌──────────────┐  [1st src _action_done] ┌──────────────┐ [last dest _action_done]┌──────────────┐
     │    draft    │ ─────────────────> │   assigned   │ ──────────────────────> │  in_progress │ ──────────────────────> │     done     │
     └─────┬───────┘                    └──────┬───────┘                         └───┬──────────┘                         └──────────────┘
@@ -193,8 +193,9 @@ and the scope is for the transit picking itself (not the entire transit).
                        ┌──────┴──────┐                    by creating a new picking and moves for the delegated lines in the child company,
                        │    cancel   │                    and link it to the original picking, then set the state of the original picking to 'draft'.
                        └─────────────┘
-                       
+```     
 - incoming (dest side):
+```
     ┌─────────────┐   [propgate from src]   ┌──────────────┐     [_action_done]      ┌──────────────┐   [_create_backorder]
     │    draft    │ ──────────────────────> │   assigned   │ ──────────────────────> │     done     │ ──────────────────────> New transit route
     └─────┬───────┘                         └──────┬───────┘                         └──────────────┘                         
