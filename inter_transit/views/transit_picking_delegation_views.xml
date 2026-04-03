@@ -1,0 +1,103 @@
+<odoo>
+	<record id="view_transit_picking_delegation_form" model="ir.ui.view">
+		<field name="name">transit.picking.delegation.form</field>
+		<field name="model">transit.picking.delegation</field>
+		<field name="arch" type="xml">
+			<form string="Delegate to Child Company">
+
+				<!-- ── Info banners ──────────────────────────────────────────────── -->
+				<div class="alert alert-info mb-3" role="alert" invisible="break_type != 'whole'">
+					<i class="fa fa-info-circle me-1"/>
+					<strong>Whole Break:</strong>
+					The entire transfer will be reassigned in-place to the selected child company.
+					Nothing to configure — just select the child company and confirm.
+				</div>
+				<div class="alert alert-warning mb-3" role="alert" invisible="break_type != 'partial'">
+					<i class="fa fa-exclamation-triangle me-1"/>
+					<strong>Partial Break:</strong>
+					Specify how much to delegate per product. The remainder stays with this company.
+					<br/>
+					<i class="fa fa-lightbulb-o me-1"/>
+					<em>Tip: If you delegate 100% of every product, the entire transfer will be
+					reassigned in-place — same as Whole Break.</em>
+				</div>
+
+				<!-- ── Header ────────────────────────────────────────────────────── -->
+				<group>
+					<div class="oe_title">
+						<h1>
+							<field name="name" readonly="1"/>
+						</h1>
+					</div>
+
+					<!-- Shown only when this picking was itself created by a prior delegation -->
+					<field name="delegation_id_display" string="Delegated From" readonly="1" invisible="not delegation_id_display"/>
+
+					<field name="child_company_id" options="{'no_create': True, 'no_open': True}"/>
+					<field name="break_type" string="Delegation Type" widget="selection"/>
+				</group>
+
+				<!-- ── Notebook ──────────────────────────────────────────────────── -->
+				<notebook>
+
+					<!-- Page 1: delegation quantities -->
+					<page string="Quantities to Delegate" invisible="break_type != 'partial'">
+						<field name="delegation_wizard_line_ids" nolabel="1">
+							<list editable="bottom" create="0" delete="0">
+								<field name="move_id" column_invisible="1"/>
+								<field name="product_id" readonly="1"/>
+								<field name="original_qty" string="Demand" readonly="1"/>
+								<field name="delegated_qty" string="Delegate"/>
+								<field name="product_uom" string="Unit of Measure" readonly="1"/>
+							</list>
+						</field>
+					</page>
+
+					<!-- Page 2: existing child routes already delegated from this picking -->
+					<page string="Delegated Routes" invisible="not delegation_ids_display">
+							<style>
+									.o_field_html .o_transit_banner_table {
+											display: grid;
+											grid-template-columns: max-content 1fr;
+											gap: 6px 0;
+									}
+									.o_field_html .o_transit_banner_row {
+											display: contents;
+									}
+									.o_field_html .o_transit_banner_label {
+											display: flex;
+											align-items: center;
+											font-weight: 700;
+											font-size: 0.75rem;
+											text-transform: uppercase;
+											letter-spacing: 0.05em;
+											white-space: nowrap;
+											padding: 8px 16px 8px 12px;
+											border-radius: 4px 0 0 4px;
+									}
+									.o_field_html .o_transit_banner_content {
+											display: flex;
+											align-items: center;
+											gap: 4px;
+											padding: 8px 12px;
+											border-radius: 0 4px 4px 0;
+									}
+							</style>
+							<field name="delegation_ids_display"
+										widget="html"
+										readonly="1"
+										nolabel="1"
+										sanitize="0"/>
+					</page>
+
+				</notebook>
+
+				<footer>
+					<widget name="transit_picking_delegation_button"/>
+					<button string="Discard" class="btn-secondary" special="cancel"/>
+				</footer>
+
+			</form>
+		</field>
+	</record>
+</odoo>

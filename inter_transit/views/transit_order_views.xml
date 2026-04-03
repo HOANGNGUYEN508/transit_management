@@ -1,0 +1,210 @@
+<odoo>
+	<record id="view_transit_order_tree" model="ir.ui.view">
+		<field name="name">transit.order.tree</field>
+		<field name="model">transit.order</field>
+		<field name="arch" type="xml">
+			<list decoration-muted="state == 'cancel'" decoration-danger="is_very_late or (has_mismatch and not is_reviewed)" decoration-warning="is_late and not is_very_late and not (has_mismatch and not is_reviewed)" decoration-info="is_today and not is_late and not (has_mismatch and not is_reviewed)" decoration-primary="state == 'in_progress' and not is_late and not (has_mismatch and not is_reviewed)" decoration-success="state == 'done' and (not has_mismatch or is_reviewed)">
+				<field name="name" decoration-bf="1"/>
+				<field name="src_company_id"/>
+				<field name="dest_company_id"/>
+				<field name="scheduled_date" widget="datetime"/>
+				<field name="date_done" widget="datetime" optional="show"/>
+				<field name="state" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'assigned'" decoration-primary="state == 'in_progress'" decoration-success="state == 'done'" decoration-muted="state == 'cancel'"/>
+				<field name="company_id" optional="hide"/>
+				<field name="has_mismatch" column_invisible="1"/>
+				<field name="is_late" column_invisible="1"/>
+				<field name="is_today" column_invisible="1"/>
+				<field name="is_very_late" column_invisible="1"/>
+				<field name="is_reviewed" column_invisible="1"/>
+			</list>
+		</field>
+	</record>
+
+	<record id="view_transit_order_form" model="ir.ui.view">
+		<field name="name">transit.order.form</field>
+		<field name="model">transit.order</field>
+		<field name="arch" type="xml">
+			<form class="o_transit_order">
+				<header>
+					<button name="action_confirm" string="Mark as Todo" type="object" class="oe_highlight" invisible="state != 'draft'"/>
+					<button name="action_cancel" class="btn btn-primary" string="Cancel" type="object" invisible="state in ['done', 'cancel', 'in_progress']"/>
+					<button name="action_stop" string="Stop" type="object" class="btn btn-danger" invisible="is_fully_stopped or state != 'in_progress'"/>
+					<button name="action_review" string="Mark as Reviewed" type="object" class="btn btn-warning" confirm="The mismatch on this transit is intentional and will be marked as reviewed. Continue?" invisible="state != 'done' or not has_mismatch or is_reviewed" />
+					<field name="state" widget="statusbar" statusbar_visible="draft,assigned,in_progress,done" clickable="0"/>
+				</header>
+
+				<sheet>
+					<field name="has_mismatch" invisible="1"/>
+					<field name="is_late" invisible="1"/>
+					<field name="is_today" invisible="1"/>
+					<field name="is_very_late" invisible="1"/>
+					<field name="has_done_pickings" invisible="1"/>
+
+					<widget name="web_ribbon" text="Cancelled" bg_color="text-bg-danger" invisible="state != 'cancel'"/>
+					<widget name="web_ribbon" text="Mismatch Detected" bg_color="text-bg-danger" invisible="not has_mismatch or is_reviewed"/>
+					<widget name="web_ribbon" text="Done" bg_color="text-bg-success" invisible="state != 'done' or (has_mismatch and not is_reviewed)"/>
+
+					<div class="oe_title">
+						<h1>
+							<field name="name" readonly="1" placeholder="New Transit Order"/>
+						</h1>
+					</div>
+
+					<group>
+						<group>
+							<field name="allowed_company_ids" invisible="1"/>
+							<field name="src_company_id" string="Source Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state != 'draft'" placeholder="Select source company..." domain="[('id', 'in', allowed_company_ids)]"/>
+							<field name="dest_company_id" string="Destination Company" options="{'no_create': True, 'no_open': True}" required="1" readonly="state != 'draft'" placeholder="Select destination company..." domain="[('id', 'in', allowed_company_ids)]"/>
+							<field name="company_id" readonly="1"/>
+						</group>
+						<group>
+							<field name="scheduled_date" widget="datetime" decoration-info="1" string="Scheduled Date" readonly="state not in ['draft', 'assigned']"/>
+							<field name="date_done" widget="datetime" decoration-info="1" readonly="1" invisible="state not in ['done', 'cancel']"/>
+						</group>
+					</group>
+
+					<notebook>
+
+						<!-- ── Operations ──────────────────────────────────────── -->
+						<page string="Operations" name="operations">
+							<field name="line_ids" widget="section_and_note_one2many" readonly="state not in ['draft', 'cancel', 'assigned']">
+								<list editable="bottom" decoration-muted="state == 'cancel'" decoration-warning="state == 'done' and quantity == 0" decoration-danger="state == 'done' and quantity > 0 and quantity != product_uom_qty">
+									<field name="product_uom_category_id" column_invisible="1"/>
+									<field name="company_id" column_invisible="1"/>
+									<field name="state" column_invisible="1"/>
+									<field name="product_id" required="1" context="{'default_detailed_type': 'consu'}" options="{'no_create': True}" placeholder="Product"/>
+									<field name="name" optional="hide" placeholder="Description"/>
+									<field name="note" optional="hide" placeholder="Additional note"/>
+									<field name="product_uom_qty" string="Demand"/>
+									<field name="product_uom" string="Unit" groups="uom.group_uom" options="{'no_create': True, 'no_open': True}"/>
+									<field name="quantity" column_invisible="not parent.has_done_pickings" optional="show" readonly="1"/>
+								</list>
+							</field>
+						</page>
+
+						<!-- ── Transit Pickings ────────────────────────────────── -->
+						<page string="Routes" name="transit_pickings">
+							<field name="transit_picking_ids" readonly="1" widget="section_and_note_one2many">
+								<list decoration-muted="state == 'cancel'" decoration-danger="is_very_late or has_mismatch" decoration-warning="is_late and not is_very_late and not has_mismatch" decoration-info="is_today and not is_late and not has_mismatch" decoration-primary="src_picking_state == 'done' and dest_picking_state != 'done' and not is_late and not has_mismatch" decoration-success="src_picking_state == 'done' and dest_picking_state == 'done' and not has_mismatch" open_form_view="1">
+									<field name="src_picking_id"/>
+									<field name="src_picking_state" widget="badge" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
+									<field name="dest_picking_id"/>
+									<field name="dest_picking_state" widget="badge" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
+									<widget name="transit_picking_cancel_button" invisible="(src_picking_state in ('cancel', 'done')) or state == 'in_progress'"/>
+									<widget name="transit_picking_stop_button" invisible="(src_picking_state in ('cancel', 'done')) or state != 'in_progress'"/>
+									<field name="has_mismatch" column_invisible="1"/>
+									<field name="is_late" column_invisible="1"/>
+									<field name="is_today" column_invisible="1"/>
+									<field name="is_very_late" column_invisible="1"/>
+									<field name="state" column_invisible="1"/>
+									<field name="src_picking_state" column_invisible="1"/>
+									<field name="dest_picking_state" column_invisible="1"/>
+								</list>
+
+								<form class="o_transit_picking">
+									<style>
+										.o_transit_picking .o_transit_banner_table {
+											display: grid;
+											grid-template-columns: max-content 1fr;
+											gap: 6px 0;
+										}
+										.o_transit_picking .o_transit_banner_row {
+											display: contents; /* each row's children participate in the parent grid */
+										}
+										.o_transit_picking .o_transit_banner_label {
+											display: flex;
+											align-items: center;
+											font-weight: 700;
+											font-size: 0.75rem;
+											text-transform: uppercase;
+											letter-spacing: 0.05em;
+											white-space: nowrap;
+											padding: 8px 16px 8px 12px; /* right padding = gap between label and pickings */
+											border-radius: 4px 0 0 4px;
+										}
+										.o_transit_picking .o_transit_banner_content {
+											display: flex;
+											align-items: center;
+											gap: 4px;
+											padding: 8px 12px;
+											border-radius: 0 4px 4px 0;
+										}
+									</style>
+									<sheet>
+										<!-- BACKORDER OF banner — HTML rendered cross-company (going UP the chain) -->
+										<div invisible="not backorder_parent_id">
+											<field name="backorder_parent_html" widget="html" readonly="1" nolabel="1"/>
+										</div>
+
+										<!-- DELEGATED FROM banner — HTML rendered cross-company (going UP the chain) -->
+										<div invisible="not delegation_id">
+											<field name="delegation_id_html" widget="html" readonly="1" nolabel="1"/>
+										</div>
+										<div class="o_transit_banner_table">
+											<div class="o_transit_banner_row">
+												<span class="o_transit_banner_label text-muted" style="background:#f8f9fa; border:1px solid #dee2e6; border-right:none;">
+													<i class="fa fa-exchange me-1"/> ROUTE
+												</span>
+												<div class="o_transit_banner_content" style="background:#f8f9fa; border:1px solid #dee2e6; border-left:none;">
+													<i class="fa fa-sign-out text-muted"/>
+													<span class="text-muted small fw-bold text-uppercase me-1">Delivery</span>
+													<field name="src_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold"/>
+													<field name="src_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="src_picking_state == 'draft'" decoration-warning="src_picking_state == 'assigned'" decoration-primary="src_picking_state == 'in_progress'" decoration-success="src_picking_state == 'done'" decoration-muted="src_picking_state == 'cancel'"/>
+													<i class="fa fa-long-arrow-right text-muted mx-1"/>
+													<i class="fa fa-sign-in text-muted"/>
+													<span class="text-muted small fw-bold text-uppercase mx-1">Receipt</span>
+													<field name="dest_picking_id" readonly="1" nolabel="1" options="{'no_open': False}" class="fw-semibold"/>
+													<field name="dest_picking_state" widget="badge" nolabel="1" readonly="1" decoration-info="dest_picking_state == 'draft'" decoration-warning="dest_picking_state == 'assigned'" decoration-primary="dest_picking_state == 'in_progress'" decoration-success="dest_picking_state == 'done'" decoration-muted="dest_picking_state == 'cancel'"/>
+													<div class="ms-auto" invisible="src_picking_state in ('cancel', 'done')">
+														<button name="action_cancel" string="Cancel" type="object" class="btn btn-sm btn-outline-danger" confirm="This will cancel both source and destination pickings. Are you sure?"/>
+													</div>
+												</div>
+											</div>
+
+										</div>
+
+										<notebook>
+											<!-- Page 1: comparison detail (always shown) -->
+											<page string="Route Detail" name="route_detail">
+												<field name="comparison_data" widget="transit_picking_detail"/>
+											</page>
+
+											<!-- Page 2: Backorders — HTML rendered cross-company (going DOWN the chain) -->
+											<page string="Backorders" name="backorders" invisible="not backorder_child_ids">
+												<field name="backorder_child_ids_html" widget="html" readonly="1" nolabel="1"/>
+											</page>
+
+											<!-- Page 3: Delegated Routes — HTML rendered cross-company (going DOWN the chain) -->
+											<page string="Delegated Routes" name="delegated_routes" invisible="not delegation_ids">
+												<field name="delegation_ids_html" widget="html" readonly="1" nolabel="1"/>
+											</page>
+
+										</notebook>
+
+									</sheet>
+								</form>
+							</field>
+						</page>
+
+						<page string="Notes" name="notes">
+							<field name="note" placeholder="Add an internal note..." widget="html"/>
+						</page>
+					</notebook>
+				</sheet>
+				<chatter/>
+			</form>
+		</field>
+	</record>
+
+	<record id="action_transit_order" model="ir.actions.act_window">
+		<field name="name">Inter-transits</field>
+		<field name="res_model">transit.order</field>
+		<field name="view_mode">list,form</field>
+		<field name="help" type="html">
+			<p class="o_view_nocontent_smiling_face">Create a new Inter-transit Order</p>
+			<p>Inter-company transits manage the transfer of goods between different companies.
+			Define the source and destination companies, add the products to transfer,
+			and confirm to create the corresponding delivery and receipt orders.</p>
+		</field>
+	</record>
+</odoo>

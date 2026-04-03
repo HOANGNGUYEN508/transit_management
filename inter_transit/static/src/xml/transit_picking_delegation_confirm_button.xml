@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+	<t t-name="inter_transit.TransitPickingDelegationButton">
+		<button t-if="!isInvisible" class="btn btn-primary" t-on-click="onClick" t-att-disabled="isReadonly"> 
+			Confirm Delegation
+		</button>
+	</t>
+</templates>

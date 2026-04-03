@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+	<t t-name="inter_transit.TransitPickingCancelButton">
+		<button t-if="!isInvisible" class="btn btn-sm btn-primary" t-on-click="onClickMyButton" t-att-disabled="isReadonly"> Cancel
+		</button>
+	</t>
+</templates>

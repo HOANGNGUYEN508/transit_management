@@ -1,0 +1,133 @@
+<odoo>
+	<record id="view_picking_list" model="ir.ui.view">
+		<field name="name">stock.picking.list</field>
+		<field name="model">stock.picking</field>
+		<field name="inherit_id" ref="stock.vpicktree"/>
+		<field name="arch" type="xml">
+
+			<!-- Inject the two boolean fields (column_invisible so they don't show as columns) -->
+			<xpath expr="//field[@name='company_id']" position="before">
+				<field name="needs_review" column_invisible="1"/>
+				<field name="date_changed" column_invisible="1"/>
+			</xpath>
+
+			<!-- Add color decorations to the name field -->
+			<xpath expr="//field[@name='name']" position="attributes">
+				<attribute name="decoration-warning">date_changed and not needs_review</attribute>
+				<attribute name="decoration-danger">needs_review</attribute>
+				<attribute name="decoration-bf">1</attribute>
+			</xpath>
+		</field>
+	</record>
+
+	<record id="stock_view_picking_form_inter_transit" model="ir.ui.view">
+		<field name="name">stock.picking.form.inter_transit</field>
+		<field name="model">stock.picking</field>
+		<field name="inherit_id" ref="stock.view_picking_form"/>
+		<field name="arch" type="xml">
+			<xpath expr="//header" position="inside">
+				<button 
+					invisible="state in ('done', 'cancel', 'waiting') or not company_has_children or not transit_order_id or picking_type_code != 'outgoing'" 
+					name="action_delegate" 
+					string="Delegate" type="object" class="btn btn-primary"
+					groups="inter_transit.access_group_transit_picking_manager,inter_transit.access_group_transit_order_administrator"
+				/>
+				<button name="action_dismiss_review"
+					string="Mark as Reviewed"
+					type="object"
+					class="btn-warning"
+					invisible="(not needs_review and not date_changed) or state in ('done', 'cancel')"
+				/>
+			</xpath>
+
+			<xpath expr="//div[@class='oe_title']" position="before">
+				<widget 
+					name="web_ribbon" text="Changed Detected" bg_color="text-bg-warning" 
+					invisible="not needs_review or state in ('done', 'cancel')"
+				/>
+				<widget 
+					name="web_ribbon" text="Scheduled Date Changed" bg_color="text-bg-warning" 
+					invisible="not date_changed or needs_review or state in ('done', 'cancel')"
+				/>
+			</xpath>
+
+			<xpath expr="//notebook" position="before">
+				<group>
+					<field 
+						name="delegation_id_display" 
+						string="Delegated From"
+						invisible="not delegation_id_display" 
+						readonly="1" 
+						groups="inter_transit.access_group_transit_picking_manager,inter_transit.access_group_transit_order_administrator"
+					/>
+				</group>
+			</xpath>
+
+			<xpath expr="//page[@name='operations']" position="after">
+				<page name="backorders" string="Backorders" invisible="not backorder_ids">
+					<field name="backorder_ids">
+							<list edit="0" create="0" delete="0"
+										decoration-danger="state=='cancel'"
+										decoration-info="state=='assigned'"
+										decoration-muted="state=='draft'"
+										decoration-success="state=='done'"
+										decoration-warning="state not in ('draft','cancel','done','assigned')">
+									<field name="name"/>
+									<field name="location_id" string="From"/>
+									<field name="location_dest_id" string="To"/>
+									<field name="partner_id"/>
+									<field name="origin"/>
+									<field name="company_id"/>
+									<field name="state" optional="show" widget="badge"
+												decoration-danger="state=='cancel'"
+												decoration-info="state=='assigned'"
+												decoration-muted="state=='draft'"
+												decoration-success="state=='done'"
+												decoration-warning="state not in ('draft','cancel','done','assigned')"/>
+							</list>
+					</field>
+			</page>
+
+				<page 
+					string="Delegated Routes" 
+					invisible="not delegation_ids_display" 
+					groups="inter_transit.access_group_transit_picking_manager,inter_transit.access_group_transit_order_administrator"
+				>
+					<style>
+						.o_field_html .o_transit_banner_table {
+							display: grid;
+							grid-template-columns: max-content 1fr;
+							gap: 6px 0;
+						}
+						.o_field_html .o_transit_banner_row {
+							display: contents;
+						}
+						.o_field_html .o_transit_banner_label {
+							display: flex;
+							align-items: center;
+							font-weight: 700;
+							font-size: 0.75rem;
+							text-transform: uppercase;
+							letter-spacing: 0.05em;
+							white-space: nowrap;
+							padding: 8px 16px 8px 12px;
+							border-radius: 4px 0 0 4px;
+						}
+						.o_field_html .o_transit_banner_content {
+							display: flex;
+							align-items: center;
+							gap: 4px;
+							padding: 8px 12px;
+							border-radius: 0 4px 4px 0;
+						}
+					</style>
+					<field name="delegation_ids_display"
+								widget="html"
+								readonly="1"
+								nolabel="1"
+								sanitize="0"/>
+				</page>
+			</xpath> 
+		</field>
+	</record>
+</odoo>

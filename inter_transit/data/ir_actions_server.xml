@@ -1,0 +1,248 @@
+<odoo>
+		<data>
+				<!-- ====================================================================== -->
+				<!-- Setup inter_transit Module Requirements -->
+				<!-- ====================================================================== -->
+
+				<!-- Rule 1: Create transit warehouse and setup picking types -->
+				<!--
+						Calls _get_all_descendants() so that when a new transit warehouse
+						is created (e.g. A1 just got its first child), ALL existing descendants
+						of that company (not just direct children) get the new transit location
+						added to their configs.
+		
+						Example: A1 gets first child A1a. A1, A1a, A1b, and all deeper descendants 
+						all get configs for A1.TRANSIT via _create_warehouse_transit_picking_types() 
+						which now walks all ancestors.
+				-->
+				<record id="action_create_transit_warehouse" model="ir.actions.server">
+						<field name="name">Create Transit Warehouse and Setup</field>
+						<field name="model_id" ref="base.model_res_company"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_create_transit_warehouse"/>
+						<field name="code">
+for company in records:
+    if company.child_ids:
+        try:
+            # Step 1: Create transit warehouse for the company that just got children
+            company.sudo()._create_transit_warehouse()
+ 
+            # Step 2: Reconfigure the company's own warehouses.
+            # Now that it has a transit warehouse, its own warehouses need
+            # an "own transit" config added.
+            has_real_wh = bool(env['stock.warehouse'].sudo().search([
+                ('company_id', '=', company.id),
+                ('is_transit_warehouse', '=', False),
+            ], limit=1))
+            if has_real_wh:
+                company.sudo()._create_warehouse_transit_picking_types()
+ 
+            # Step 3: Reconfigure ALL descendants.
+            # _create_warehouse_transit_picking_types() walks ancestors, so
+            # calling it on every descendant is idempotent for existing configs
+            # and will add the new transit location config where missing.
+            all_descendants = company.sudo()._get_all_descendants()
+            for descendant in all_descendants:
+                descendant_has_real_wh = bool(env['stock.warehouse'].sudo().search([
+                    ('company_id', '=', descendant.id),
+                    ('is_transit_warehouse', '=', False),
+                ], limit=1))
+                if descendant_has_real_wh:
+                    descendant.sudo()._create_warehouse_transit_picking_types()
+ 
+        except Exception as e:
+            raise Exception("Error creating transit warehouse: %s" % str(e))
+						</field>
+				</record>
+		
+				<!-- Rule 2: Update transit warehouse and sequence names when company name changes -->
+				<record id="action_update_transit_on_name_change" model="ir.actions.server">
+						<field name="name">Update Transit Warehouse/Sequence Names</field>
+						<field name="model_id" ref="base.model_res_company"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_update_transit_on_name_change"/>
+						<field name="code">
+if records:
+    try:
+        records.sudo().automation_handle_company_name_change()
+    except Exception as e:
+        raise Exception("Transit automation error: %s" % str(e))
+						</field>
+				</record>
+
+				<!-- Rule 3: Create transit picking types for newly created warehouse -->
+				<record id="action_warehouse_created" model="ir.actions.server">
+						<field name="name">Create Transit Picking Types for Warehouse</field>
+						<field name="model_id" ref="stock.model_stock_warehouse"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_warehouse_created"/>
+						<field name="code">
+for warehouse in records:
+    if warehouse.company_id:
+        try:
+            warehouse.company_id.sudo()._create_warehouse_transit_picking_types(warehouse=warehouse)
+        except Exception as e:
+            raise Exception("Error creating transit picking types for warehouse: %s" % str(e))
+						</field>
+				</record>
+
+				<!-- ====================================================================== -->
+				<!-- Inter-transit Flow - 3 Rules -->
+				<!-- Wrapper Calls: Business logic in transit.picking model methods -->
+				<!-- ====================================================================== -->
+
+				<!-- Rule 4: SRC picking done - batch search, single model call -->
+				<record id="action_transit_src_picking_done" model="ir.actions.server">
+						<field name="name">Transit: Src Picking Done</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_src_picking_done"/>
+						<field name="code">
+# Batch: find all transit picking pairs whose SRC picking is in this trigger batch
+transit_pickings = env['transit.picking'].search([
+    ('src_picking_id', 'in', records.ids)
+])
+
+if transit_pickings:
+    transit_pickings.automation_handle_src_picking_done()
+						</field>
+				</record>
+
+				<!-- Rule 5: SRC backorder created - Create dest backorder and sync moves -->
+				<record id="action_transit_src_backorder_created" model="ir.actions.server">
+						<field name="name">Transit: Src Backorder Created</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_src_backorder_created"/>
+						<field name="code">
+# records = new src backorder pickings that just became 'assigned'
+# Find their PARENT transit pickings via backorder_id
+parent_transit_pickings = env['transit.picking'].search([
+    ('src_picking_id', 'in', records.mapped('backorder_id').ids)
+])
+
+if parent_transit_pickings:
+    parent_transit_pickings.automation_handle_src_backorder_created(records)
+						</field>
+				</record>
+
+				<!-- Rule 6: DEST backorder created - create dest-only transit tracking pair -->
+				<record id="action_transit_dest_backorder_created" model="ir.actions.server">
+						<field name="name">Transit: Dest Backorder Created</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_dest_backorder_created"/>
+						<field name="code">
+# records = new dest backorder pickings (incoming, with backorder_id set, move_ids present)
+# Find parent transit pickings whose dest_picking_id = the parent picking (backorder_id)
+parent_transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.mapped('backorder_id').ids)
+])
+
+if parent_transit_pickings:
+    parent_transit_pickings.automation_handle_dest_backorder_created(records)
+						</field>
+				</record>
+
+				<!-- Rule 7: DEST picking done - batch search, single model call -->
+				<record id="action_transit_dest_picking_done" model="ir.actions.server">
+						<field name="name">Transit: Dest Picking Done</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_dest_picking_done"/>
+						<field name="code">
+# Batch: find all transit picking pairs whose DEST picking is in this trigger batch
+transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
+
+if transit_pickings:
+    transit_pickings.automation_handle_dest_picking_done()
+						</field>
+				</record>
+
+				<!-- Rule 8: Picking cancelled -->
+				<record id="action_transit_picking_cancelled" model="ir.actions.server">
+						<field name="name">Transit: Picking Cancelled</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_picking_cancelled"/>
+						<field name="code">
+src_transit_pickings = env['transit.picking'].search([
+    ('src_picking_id', 'in', records.ids)
+])
+dest_transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
+
+if src_transit_pickings or dest_transit_pickings:
+    (src_transit_pickings | dest_transit_pickings).automation_handle_picking_cancelled(
+        records.ids
+    )
+						</field>
+				</record>
+
+				<!-- Rule 9: Picking deleted -->
+				<record id="action_transit_picking_deleted" model="ir.actions.server">
+						<field name="name">Transit: Picking Deleted</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_picking_deleted"/>
+						<field name="code">
+src_transit_pickings = env['transit.picking'].search([
+    ('src_picking_id', 'in', records.ids)
+])
+dest_transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
+
+if src_transit_pickings or dest_transit_pickings:
+    (src_transit_pickings | dest_transit_pickings).automation_handle_picking_deleted(
+        records.ids
+    )
+						</field>
+				</record>
+
+				<!-- Rule 10: Guard - block dest picking mark as todo when src not done -->
+				<record id="action_transit_dest_picking_assigned_guard" model="ir.actions.server">
+						<field name="name">Transit: Block Dest Picking Mark As Todo When Src Not Done</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_dest_picking_assigned_guard"/>
+						<field name="code">
+transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
+if transit_pickings:
+    transit_pickings.automation_handle_dest_picking_advance_guard('assign')
+						</field>
+				</record>
+
+				<!-- Rule 11: Guard - block dest picking validation when src not done -->
+				<record id="action_transit_dest_picking_validate_guard" model="ir.actions.server">
+						<field name="name">Transit: Block Dest Picking Validation When Src Not Done</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_dest_picking_validate_guard"/>
+						<field name="code">
+transit_pickings = env['transit.picking'].search([
+    ('dest_picking_id', 'in', records.ids)
+])
+
+if transit_pickings:
+    transit_pickings.automation_handle_dest_picking_advance_guard('validate')
+						</field>
+				</record>
+
+				<!-- Rule 12: Guard - revert dest backorder to confirmed when src not yet created -->
+				<record id="action_transit_dest_backorder_assigned_guard" model="ir.actions.server">
+						<field name="name">Transit: Block Dest Backorder Mark As Todo When Src Not Done</field>
+						<field name="model_id" ref="stock.model_stock_picking"/>
+						<field name="state">code</field>
+						<field name="base_automation_id" ref="automation_transit_dest_backorder_assigned_guard"/>
+						<field name="code">
+records.automation_handle_dest_backorder_init_revert()
+						</field>
+				</record>
+		</data>
+</odoo>

@@ -1,0 +1,48 @@
+<odoo>
+	<data>
+		<record id="access_group_transit_order_viewer" model="res.groups">
+			<field name="name">Inter-transit Viewer</field>
+			<field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+		</record>
+
+		<record id="access_group_transit_picking_manager" model="res.groups">
+			<field name="name">Inter-transit Picking Manager</field>
+			<field 
+				name="implied_ids" 
+				eval="[
+					(4, ref('base.group_user')),
+					(4, ref('stock_account.group_stock_accounting_automatic')),
+					(4, ref('product.group_product_manager')),
+					(4, ref('stock.group_stock_manager')),
+					(4, ref('stock.group_stock_multi_warehouses')),
+					(4, ref('stock.group_stock_multi_locations')),
+					(4, ref('base.group_multi_company')),
+					(4, ref('inter_transit.access_group_transit_order_viewer')),
+					(4, ref('stock.group_production_lot')),
+				]"
+			/>
+		</record>
+
+		<record id="access_group_transit_order_administrator" model="res.groups">
+			<field name="name">Inter-transit Administrator</field>
+			<field 
+				name="implied_ids" 
+				eval="[
+					(4, ref('base.group_user')),
+					(4, ref('stock_account.group_stock_accounting_automatic')),
+					(4, ref('product.group_product_manager')),
+					(4, ref('stock.group_stock_manager')),
+					(4, ref('stock.group_stock_multi_warehouses')),
+					(4, ref('stock.group_stock_multi_locations')),
+					(4, ref('base.group_multi_company')),
+					(4, ref('access_group_transit_picking_manager')),
+				]"
+			/>
+		</record>
+
+		<record id="access_group_transit_picking_viewer" model="res.groups">
+			<field name="name">Inter-transit Picking Viewer</field>
+			<field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+		</record>
+	</data>
+</odoo>
